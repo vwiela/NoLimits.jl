@@ -63,7 +63,7 @@ end
 function Distributions.logpdf(hmm::ContinuousTimeDiscreteStatesHMM, y::Real)
     log_p_hidden = log.(probabilities_hidden_states(hmm))
     log_p_obs = logpdf.(hmm.emission_dists, Ref(y))
-    return Lux.logsumexp(log_p_hidden .+ log_p_obs)
+    return _hmm_logsumexp(log_p_hidden .+ log_p_obs)
 end
 
 function Distributions.rand(rng::AbstractRNG, hmm::ContinuousTimeDiscreteStatesHMM)
@@ -120,4 +120,3 @@ Distributions.median(hmm::ContinuousTimeDiscreteStatesHMM) = quantile(hmm, 0.5)
 Distributions.params(hmm::ContinuousTimeDiscreteStatesHMM) = (hmm.transition_matrix, hmm.emission_dists, hmm.initial_dist, hmm.Δt)
 
 Base.length(hmm::ContinuousTimeDiscreteStatesHMM) = 1
-

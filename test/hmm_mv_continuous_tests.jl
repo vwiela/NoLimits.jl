@@ -8,6 +8,21 @@ using LinearAlgebra
 using Random
 using Turing
 
+function _recursive_hmm_loglikelihood(dists, ys)
+    prior = nothing
+    ll = 0.0
+    for (dist, y) in zip(dists, ys)
+        dist_use = prior === nothing ? dist : NoLimits._hmm_with_initial_probs(dist, prior)
+        if ismissing(y)
+            prior = probabilities_hidden_states(dist_use)
+        else
+            ll += logpdf(dist_use, y)
+            prior = posterior_hidden_states(dist_use, y)
+        end
+    end
+    return ll
+end
+
 # Rate matrix used throughout: Q = [-1 1; 2 -2], stationary distribution [2/3, 1/3]
 const _Q_MV = [-1.0 1.0; 2.0 -2.0]
 
@@ -287,13 +302,16 @@ end
     @test isfinite(ll)
 end
 
-@testset "MVContinuousTimeHMM: loglikelihood matches rowwise simulation semantics" begin
-    Q = [-0.2 0.2; 0.2 -0.2]
+@testset "MVContinuousTimeHMM: loglikelihood uses recursive filtering" begin
+    Q = [-1.2 1.2 0.0;
+          0.0 -1.0 1.0;
+          0.0 0.0 0.0]
     emissions = (
-        (Normal(0.0, 0.25), Normal(0.0, 0.25)),
-        (Normal(3.0, 0.25), Normal(3.0, 0.25)),
+        (Categorical([1.0, 0.0, 0.0]), Categorical([1.0, 0.0, 0.0])),
+        (Categorical([0.0, 1.0, 0.0]), Categorical([0.0, 1.0, 0.0])),
+        (Categorical([0.0, 0.0, 1.0]), Categorical([0.0, 0.0, 1.0])),
     )
-    init = Categorical([1.0, 0.0])
+    init = Categorical([1.0, 0.0, 0.0])
 
     model = @Model begin
         @fixedEffects begin
@@ -306,22 +324,25 @@ end
         end
         @formulas begin
             y ~ MVContinuousTimeDiscreteStatesHMM(
-                [-0.2 0.2; 0.2 -0.2],
+                [-1.2 1.2 0.0;
+                  0.0 -1.0 1.0;
+                  0.0 0.0 0.0],
                 (
-                    (Normal(0.0, 0.25), Normal(0.0, 0.25)),
-                    (Normal(3.0, 0.25), Normal(3.0, 0.25)),
+                    (Categorical([1.0, 0.0, 0.0]), Categorical([1.0, 0.0, 0.0])),
+                    (Categorical([0.0, 1.0, 0.0]), Categorical([0.0, 1.0, 0.0])),
+                    (Categorical([0.0, 0.0, 1.0]), Categorical([0.0, 0.0, 1.0])),
                 ),
-                Categorical([1.0, 0.0]),
+                Categorical([1.0, 0.0, 0.0]),
                 dt
             )
         end
     end
 
     df = DataFrame(
-        ID = [1, 1],
-        t  = [0.0, 1.0],
-        dt = [1.0, 1.0],
-        y  = [[0.0, 0.1], [3.0, 2.9]],
+        ID = [1, 1, 1],
+        t  = [0.0, 1.0, 2.0],
+        dt = [1.0, 1.0, 1.0],
+        y  = [[2, 2], [2, 2], [3, 3]],
     )
 
     dm = DataModel(model, df; primary_id=:ID, time_col=:t)
@@ -329,8 +350,62 @@ end
     dist = MVContinuousTimeDiscreteStatesHMM(Q, emissions, init, 1.0)
 
     ll = NoLimits.loglikelihood(dm, θ, ComponentArray())
-    expected = sum(logpdf(dist, y) for y in df.y)
+    expected = _recursive_hmm_loglikelihood(fill(dist, nrow(df)), df.y)
 
+    @test isapprox(ll, expected; atol=1e-12)
+end
+
+@testset "MVContinuousTimeHMM: missing observations still propagate hidden state" begin
+    Q = [-1.2 1.2 0.0;
+          0.0 -1.0 1.0;
+          0.0 0.0 0.0]
+    emissions = (
+        (Categorical([1.0, 0.0, 0.0]), Categorical([1.0, 0.0, 0.0])),
+        (Categorical([0.0, 1.0, 0.0]), Categorical([0.0, 1.0, 0.0])),
+        (Categorical([0.0, 0.0, 1.0]), Categorical([0.0, 0.0, 1.0])),
+    )
+    init = Categorical([1.0, 0.0, 0.0])
+
+    model = @Model begin
+        @fixedEffects begin
+            dummy = RealNumber(0.0)
+        end
+
+        @covariates begin
+            t  = Covariate()
+            dt = Covariate()
+        end
+        @formulas begin
+            y ~ MVContinuousTimeDiscreteStatesHMM(
+                [-1.2 1.2 0.0;
+                  0.0 -1.0 1.0;
+                  0.0 0.0 0.0],
+                (
+                    (Categorical([1.0, 0.0, 0.0]), Categorical([1.0, 0.0, 0.0])),
+                    (Categorical([0.0, 1.0, 0.0]), Categorical([0.0, 1.0, 0.0])),
+                    (Categorical([0.0, 0.0, 1.0]), Categorical([0.0, 0.0, 1.0])),
+                ),
+                Categorical([1.0, 0.0, 0.0]),
+                dt
+            )
+        end
+    end
+
+    df = DataFrame(
+        ID = [1, 1, 1],
+        t  = [0.0, 1.0, 2.0],
+        dt = [1.0, 1.0, 1.0],
+        y  = Any[[2, 2], missing, [3, 3]],
+    )
+
+    dm = DataModel(model, df; primary_id=:ID, time_col=:t)
+    θ = get_θ0_untransformed(dm.model.fixed.fixed)
+    dist = MVContinuousTimeDiscreteStatesHMM(Q, emissions, init, 1.0)
+
+    ll = NoLimits.loglikelihood(dm, θ, ComponentArray())
+    expected = _recursive_hmm_loglikelihood(fill(dist, nrow(df)), df.y)
+
+    @test isfinite(ll)
     @test isapprox(ll, expected; atol=1e-12)
 end
 
@@ -367,7 +442,7 @@ end
     @test all(isfinite, g)
 end
 
-@testset "MVContinuousTimeHMM: MLE and MAP" begin
+@testset "MVContinuousTimeHMM: MLE/MAP/MCMC/VI" begin
     model = @Model begin
         @fixedEffects begin
             μ1 = RealNumber(0.0, prior=Normal(0.0, 2.0))
@@ -407,4 +482,8 @@ end
         turing_kwargs=(n_samples=15, n_adapt=5, progress=false)))
     @test res_mcmc isa FitResult
     @test NoLimits.get_chain(res_mcmc) isa MCMCChains.Chains
+
+    res_vi = fit_model(dm, NoLimits.VI(; turing_kwargs=(max_iter=10, progress=false)))
+    @test res_vi isa FitResult
+    @test isfinite(NoLimits.get_objective(res_vi))
 end

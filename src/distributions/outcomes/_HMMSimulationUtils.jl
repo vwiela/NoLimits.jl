@@ -1,4 +1,4 @@
-# Internal helpers shared by HMM simulation paths.
+# Internal helpers shared by HMM estimation and simulation paths.
 # Not exported.
 
 using Distributions
@@ -14,6 +14,8 @@ function _hmm_onehot_prior(n_states::Int, state::Int)
     probs[state] = 1.0
     return Categorical(probs)
 end
+
+@inline _hmm_probs_to_categorical(probs) = Categorical(probs)
 
 function _sanitize_hmm_probs(probs_in)
     probs = Float64.(probs_in)
@@ -59,6 +61,49 @@ end
         dist.Δt,
     )
 end
+
+@inline function _hmm_with_initial_probs(dist::DiscreteTimeDiscreteStatesHMM, probs)
+    return DiscreteTimeDiscreteStatesHMM(
+        dist.transition_matrix,
+        dist.emission_dists,
+        _hmm_probs_to_categorical(probs),
+    )
+end
+
+@inline function _hmm_with_initial_probs(dist::ContinuousTimeDiscreteStatesHMM, probs)
+    return ContinuousTimeDiscreteStatesHMM(
+        dist.transition_matrix,
+        dist.emission_dists,
+        _hmm_probs_to_categorical(probs),
+        dist.Δt,
+    )
+end
+
+@inline function _hmm_with_initial_probs(dist::MVDiscreteTimeDiscreteStatesHMM, probs)
+    return MVDiscreteTimeDiscreteStatesHMM(
+        dist.transition_matrix,
+        dist.emission_dists,
+        _hmm_probs_to_categorical(probs),
+    )
+end
+
+@inline function _hmm_with_initial_probs(dist::MVContinuousTimeDiscreteStatesHMM, probs)
+    return MVContinuousTimeDiscreteStatesHMM(
+        dist.transition_matrix,
+        dist.emission_dists,
+        _hmm_probs_to_categorical(probs),
+        dist.Δt,
+    )
+end
+
+@inline _hmm_with_prior(dist, prior_probs) =
+    prior_probs === nothing ? dist : _hmm_with_initial_probs(dist, prior_probs)
+
+@inline _hmm_predicted_probs(dist, prior_probs=nothing) =
+    probabilities_hidden_states(_hmm_with_prior(dist, prior_probs))
+
+@inline _hmm_posterior_probs(dist, y, prior_probs=nothing) =
+    posterior_hidden_states(_hmm_with_prior(dist, prior_probs), y)
 
 @inline function _sample_hmm_hidden_state(rng::AbstractRNG, dist)
     probs = _sanitize_hmm_probs(probabilities_hidden_states(dist))

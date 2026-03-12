@@ -1336,7 +1336,36 @@ end
     @test notes_ineligible.closed_form_mstep_mode == :numeric_only
 end
 
-@testset "SAEM discrete HMM emission stats use rowwise posteriors" begin
+function _saem_exact_discrete_hmm_gamma(dists, ys)
+    K = dists[1].n_states
+    n_time = length(dists)
+    gamma = zeros(Float64, K, n_time)
+    total = 0.0
+    first_probs = probabilities_hidden_states(dists[1])
+    ranges = ntuple(_ -> 1:K, n_time)
+
+    for path in Iterators.product(ranges...)
+        w = first_probs[path[1]]
+        for t in 1:n_time
+            y = ys[t]
+            if !ismissing(y)
+                w *= pdf(dists[t].emission_dists[path[t]], y)
+            end
+            if t < n_time
+                w *= dists[t + 1].transition_matrix[path[t], path[t + 1]]
+            end
+        end
+        total += w
+        for t in 1:n_time
+            gamma[path[t], t] += w
+        end
+    end
+
+    gamma ./= total
+    return gamma
+end
+
+@testset "SAEM discrete HMM emission stats use recursive sequence posteriors" begin
     P = [0.85 0.15; 0.25 0.75]
     init = Categorical([0.6, 0.4])
     dists = [
@@ -1347,11 +1376,11 @@ end
     ys = Union{Missing, Int}[1, missing, 0]
 
     gamma, ok = NoLimits._saem_hmm_smoothed_gamma(dists, ys, Float64)
+    expected = _saem_exact_discrete_hmm_gamma(dists, ys)
 
     @test ok
-    @test isapprox(gamma[:, 1], posterior_hidden_states(dists[1], 1); atol=1e-12)
-    @test isapprox(gamma[:, 2], probabilities_hidden_states(dists[2]); atol=1e-12)
-    @test isapprox(gamma[:, 3], posterior_hidden_states(dists[3], 0); atol=1e-12)
+    @test isapprox(gamma, expected; atol=1e-12)
+    @test !isapprox(gamma[:, 1], posterior_hidden_states(dists[1], 1); atol=1e-6)
 end
 
 @testset "SAEM builtin_stats HMM emission handles fully missing rows (regression)" begin

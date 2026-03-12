@@ -959,6 +959,7 @@ function _loglikelihood_individual(dm::DataModel, idx::Int, θ, η_ind, cache::_
     ll = 0.0
     obs_cols = dm.config.obs_cols
     rowwise_re = _needs_rowwise_random_effects(dm, idx; obs_only=true)
+    hmm_priors = Dict{Symbol, Any}()
     for i in eachindex(obs_rows)
         vary = vary_cache === nothing ? _varying_at(dm, ind, i, _get_col(dm.df, dm.config.time_col)[obs_rows]) : vary_cache[i]
         η_row = _row_random_effects_at(dm, idx, i, η_ind, rowwise_re; obs_only=true)
@@ -970,11 +971,17 @@ function _loglikelihood_individual(dm::DataModel, idx::Int, θ, η_ind, cache::_
             dist = getproperty(obs, col)
             if dist isa ContinuousTimeDiscreteStatesHMM || dist isa MVContinuousTimeDiscreteStatesHMM ||
                dist isa DiscreteTimeDiscreteStatesHMM || dist isa MVDiscreteTimeDiscreteStatesHMM
-                y === missing && continue
-                v = logpdf(dist, y)
+                prior = get(hmm_priors, col, nothing)
+                dist_use = _hmm_with_prior(dist, prior)
+                if y === missing
+                    hmm_priors[col] = probabilities_hidden_states(dist_use)
+                    continue
+                end
+                v = logpdf(dist_use, y)
                 if !isfinite(v)
                     return -Inf
                 end
+                hmm_priors[col] = posterior_hidden_states(dist_use, y)
             else
                 y === missing && continue
                 v = _fast_logpdf(dist, y)

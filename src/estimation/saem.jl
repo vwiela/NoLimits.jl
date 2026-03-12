@@ -856,6 +856,12 @@ end
 
 @inline _saem_hmm_state_emission_probs(::Any, ::Any, ::Type) = nothing
 
+@inline _saem_hmm_transition_matrix(dist::DiscreteTimeDiscreteStatesHMM, T::Type) =
+    T.(dist.transition_matrix)
+
+@inline _saem_hmm_transition_matrix(dist::MVDiscreteTimeDiscreteStatesHMM, T::Type) =
+    T.(dist.transition_matrix)
+
 function _saem_hmm_smoothed_gamma(dists::Vector, ys::Vector, T::Type)
     n_time = length(dists)
     n_time == length(ys) || return (nothing, false)
@@ -866,17 +872,40 @@ function _saem_hmm_smoothed_gamma(dists::Vector, ys::Vector, T::Type)
         return (nothing, false)
 
     K = first_dist.n_states
-    gamma = zeros(T, K, n_time)
+    alpha = zeros(T, K, n_time)
+    beta = ones(T, K, n_time)
+    emissions = zeros(T, K, n_time)
+    scales = zeros(T, n_time)
+    prior = nothing
     for t in 1:n_time
         dist_t = dists[t]
         typeof(dist_t) === typeof(first_dist) || return (nothing, false)
-        b = _saem_hmm_state_emission_probs(dist_t, ys[t], T)
+        dist_use = _hmm_with_prior(dist_t, prior)
+        b = _saem_hmm_state_emission_probs(dist_use, ys[t], T)
         b === nothing && return (nothing, false)
-        pred = T.(probabilities_hidden_states(dist_t))
+        pred = T.(probabilities_hidden_states(dist_use))
         unnorm = pred .* b
         c = sum(unnorm)
         (isfinite(c) && c > zero(T)) || return (nothing, false)
-        gamma[:, t] .= unnorm ./ c
+        alpha[:, t] .= unnorm ./ c
+        emissions[:, t] .= b
+        scales[t] = c
+        prior = alpha[:, t]
+    end
+
+    for t in (n_time - 1):-1:1
+        trans_next = _saem_hmm_transition_matrix(dists[t + 1], T)
+        beta[:, t] .= trans_next * (emissions[:, t + 1] .* beta[:, t + 1])
+        c_next = scales[t + 1]
+        (isfinite(c_next) && c_next > zero(T)) || return (nothing, false)
+        beta[:, t] ./= c_next
+    end
+
+    gamma = alpha .* beta
+    for t in 1:n_time
+        s = sum(gamma[:, t])
+        (isfinite(s) && s > zero(T)) || return (nothing, false)
+        gamma[:, t] ./= s
     end
     return (gamma, true)
 end
