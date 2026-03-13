@@ -107,7 +107,7 @@ end
 function Distributions.logpdf(hmm::MVDiscreteTimeDiscreteStatesHMM, y::AbstractVector)
     log_p = log.(probabilities_hidden_states(hmm))
     log_l = [_mv_emission_logpdf(hmm.emission_dists[k], y) for k in 1:hmm.n_states]
-    return Lux.logsumexp(log_p .+ log_l)
+    return _hmm_logsumexp(log_p .+ log_l)
 end
 
 Distributions.pdf(hmm::MVDiscreteTimeDiscreteStatesHMM, y::AbstractVector) =

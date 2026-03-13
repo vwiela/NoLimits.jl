@@ -54,6 +54,21 @@ end
     @test isapprox(p, p_expm; rtol=1e-10, atol=1e-12)
 end
 
+function _recursive_hmm_loglikelihood(dists, ys)
+    prior = nothing
+    ll = 0.0
+    for (dist, y) in zip(dists, ys)
+        dist_use = prior === nothing ? dist : NoLimits._hmm_with_initial_probs(dist, prior)
+        if ismissing(y)
+            prior = probabilities_hidden_states(dist_use)
+        else
+            ll += logpdf(dist_use, y)
+            prior = posterior_hidden_states(dist_use, y)
+        end
+    end
+    return ll
+end
+
 @testset "HMM DataModel + loglikelihood" begin
     model = @Model begin
         @fixedEffects begin
@@ -94,6 +109,115 @@ end
     ll = NoLimits.loglikelihood(dm, θ, ComponentArray())
 
     @test isfinite(ll)
+end
+
+@testset "HMM loglikelihood uses recursive filtering" begin
+    Q = [-1.2 1.2 0.0;
+          0.0 -1.0 1.0;
+          0.0 0.0 0.0]
+    emissions = (
+        Categorical([1.0, 0.0, 0.0]),
+        Categorical([0.0, 1.0, 0.0]),
+        Categorical([0.0, 0.0, 1.0]),
+    )
+    init = Categorical([1.0, 0.0, 0.0])
+
+    model = @Model begin
+        @fixedEffects begin
+            dummy = RealNumber(0.0)
+        end
+
+        @covariates begin
+            t = Covariate()
+            dt = Covariate()
+        end
+
+        @formulas begin
+            y ~ ContinuousTimeDiscreteStatesHMM(
+                [-1.2 1.2 0.0;
+                  0.0 -1.0 1.0;
+                  0.0 0.0 0.0],
+                (
+                    Categorical([1.0, 0.0, 0.0]),
+                    Categorical([0.0, 1.0, 0.0]),
+                    Categorical([0.0, 0.0, 1.0]),
+                ),
+                Categorical([1.0, 0.0, 0.0]),
+                dt
+            )
+        end
+    end
+
+    df = DataFrame(
+        ID = [1, 1, 1],
+        t = [0.0, 1.0, 2.0],
+        dt = [1.0, 1.0, 1.0],
+        y = [2, 2, 3]
+    )
+
+    dm = DataModel(model, df; primary_id=:ID, time_col=:t)
+    θ = get_θ0_untransformed(dm.model.fixed.fixed)
+    dist = ContinuousTimeDiscreteStatesHMM(Q, emissions, init, 1.0)
+
+    ll = NoLimits.loglikelihood(dm, θ, ComponentArray())
+    expected = _recursive_hmm_loglikelihood(fill(dist, nrow(df)), df.y)
+
+    @test isapprox(ll, expected; atol=1e-12)
+end
+
+@testset "HMM missing observations still propagate hidden state in loglikelihood" begin
+    Q = [-1.2 1.2 0.0;
+          0.0 -1.0 1.0;
+          0.0 0.0 0.0]
+    emissions = (
+        Categorical([1.0, 0.0, 0.0]),
+        Categorical([0.0, 1.0, 0.0]),
+        Categorical([0.0, 0.0, 1.0]),
+    )
+    init = Categorical([1.0, 0.0, 0.0])
+
+    model = @Model begin
+        @fixedEffects begin
+            dummy = RealNumber(0.0)
+        end
+
+        @covariates begin
+            t = Covariate()
+            dt = Covariate()
+        end
+
+        @formulas begin
+            y ~ ContinuousTimeDiscreteStatesHMM(
+                [-1.2 1.2 0.0;
+                  0.0 -1.0 1.0;
+                  0.0 0.0 0.0],
+                (
+                    Categorical([1.0, 0.0, 0.0]),
+                    Categorical([0.0, 1.0, 0.0]),
+                    Categorical([0.0, 0.0, 1.0]),
+                ),
+                Categorical([1.0, 0.0, 0.0]),
+                dt
+            )
+        end
+    end
+
+    df = DataFrame(
+        ID = [1, 1, 1],
+        t = [0.0, 1.0, 2.0],
+        dt = [1.0, 1.0, 1.0],
+        y = Union{Missing, Int}[2, missing, 3]
+    )
+
+    dm = DataModel(model, df; primary_id=:ID, time_col=:t)
+    θ = get_θ0_untransformed(dm.model.fixed.fixed)
+    dist = ContinuousTimeDiscreteStatesHMM(Q, emissions, init, 1.0)
+
+    ll = NoLimits.loglikelihood(dm, θ, ComponentArray())
+    expected = _recursive_hmm_loglikelihood(fill(dist, nrow(df)), df.y)
+
+    @test isfinite(ll)
+    @test isapprox(ll, expected; atol=1e-12)
 end
 
 @testset "HMM ForwardDiff" begin
@@ -138,7 +262,7 @@ end
     @test length(g) == length(θ0)
 end
 
-@testset "HMM MLE optimization" begin
+@testset "HMM MLE/MAP/MCMC/VI optimization" begin
     model = @Model begin
         @fixedEffects begin
             λ12_r = RealNumber(0.1, scale=:log, prior = LogNormal(0.01, 1.0))
@@ -184,5 +308,10 @@ end
     @test res_map isa FitResult
     @test isfinite(NoLimits.get_objective(res_map))
     @test res_mcmc isa FitResult
+    @test NoLimits.get_chain(res_mcmc) isa MCMCChains.Chains
+
+    res_vi = fit_model(dm, NoLimits.VI(; turing_kwargs=(max_iter=10, progress=false)))
+    @test res_vi isa FitResult
+    @test isfinite(NoLimits.get_objective(res_vi))
 
 end

@@ -6,6 +6,21 @@ using ForwardDiff
 using ComponentArrays
 using Turing
 
+function _recursive_hmm_loglikelihood(dists, ys)
+    prior = nothing
+    ll = 0.0
+    for (dist, y) in zip(dists, ys)
+        dist_use = prior === nothing ? dist : NoLimits._hmm_with_initial_probs(dist, prior)
+        if ismissing(y)
+            prior = probabilities_hidden_states(dist_use)
+        else
+            ll += logpdf(dist_use, y)
+            prior = posterior_hidden_states(dist_use, y)
+        end
+    end
+    return ll
+end
+
 @testset "Discrete-time HMM transition matrix is used" begin
     emissions = (Bernoulli(0.95), Bernoulli(0.05))
     init = Categorical([1.0, 0.0])
@@ -24,87 +39,96 @@ using Turing
     @test post_flip[2] > post_flip[1]
 end
 
-@testset "Discrete-time HMM loglikelihood + update" begin
+@testset "Discrete-time HMM loglikelihood uses recursive filtering" begin
     model = @Model begin
         @covariates begin
             t = Covariate()
         end
 
         @fixedEffects begin
-            p1_r = RealNumber(0.0)
-            p2_r = RealNumber(0.0)
+            dummy = RealNumber(0.0)
         end
 
         @formulas begin
-            p1 = 1 / (1 + exp(-p1_r))
-            p2 = 1 / (1 + exp(-p2_r))
-            P = [0.9 0.1;
-                 0.2 0.8]
+            P = [0.6 0.4 0.0;
+                 0.0 0.7 0.3;
+                 0.0 0.0 1.0]
             y ~ DiscreteTimeDiscreteStatesHMM(P,
-                                              (Bernoulli(p1), Bernoulli(p2)),
-                                              Categorical([0.6, 0.4]))
+                                              (Categorical([1.0, 0.0, 0.0]),
+                                               Categorical([0.0, 1.0, 0.0]),
+                                               Categorical([0.0, 0.0, 1.0])),
+                                              Categorical([1.0, 0.0, 0.0]))
         end
     end
 
     df = DataFrame(
         ID = [1, 1, 1],
         t = [0.0, 1.0, 2.0],
-        y = [0, 1, 1]
+        y = [2, 2, 3]
     )
 
     dm = DataModel(model, df; primary_id=:ID, time_col=:t)
     θ = get_θ0_untransformed(dm.model.fixed.fixed)
     ll = NoLimits.loglikelihood(dm, θ, ComponentArray())
+    dist = DiscreteTimeDiscreteStatesHMM(
+        [0.6 0.4 0.0; 0.0 0.7 0.3; 0.0 0.0 1.0],
+        (
+            Categorical([1.0, 0.0, 0.0]),
+            Categorical([0.0, 1.0, 0.0]),
+            Categorical([0.0, 0.0, 1.0]),
+        ),
+        Categorical([1.0, 0.0, 0.0])
+    )
+    expected = _recursive_hmm_loglikelihood(fill(dist, nrow(df)), df.y)
 
     @test isfinite(ll)
+    @test isapprox(ll, expected; atol=1e-12)
 end
 
-@testset "Discrete-time HMM missing observation propagates hidden state (regression)" begin
+@testset "Discrete-time HMM missing observations still propagate hidden state" begin
     model = @Model begin
         @covariates begin
             t = Covariate()
         end
 
         @fixedEffects begin
-            p1 = RealNumber(0.9)
-            p2 = RealNumber(0.2)
+            dummy = RealNumber(0.0)
         end
 
         @formulas begin
-            P = [0.85 0.15;
-                 0.25 0.75]
+            P = [0.6 0.4 0.0;
+                 0.0 0.7 0.3;
+                 0.0 0.0 1.0]
             y ~ DiscreteTimeDiscreteStatesHMM(P,
-                                              (Bernoulli(p1), Bernoulli(p2)),
-                                              Categorical([0.6, 0.4]))
+                                              (Categorical([1.0, 0.0, 0.0]),
+                                               Categorical([0.0, 1.0, 0.0]),
+                                               Categorical([0.0, 0.0, 1.0])),
+                                              Categorical([1.0, 0.0, 0.0]))
         end
     end
 
     df = DataFrame(
         ID = [1, 1, 1],
         t = [0.0, 1.0, 2.0],
-        y = Union{Missing, Int}[1, missing, 0]
+        y = Union{Missing, Int}[2, missing, 3]
     )
 
     dm = DataModel(model, df; primary_id=:ID, time_col=:t)
     θ = get_θ0_untransformed(dm.model.fixed.fixed)
     ll = NoLimits.loglikelihood(dm, θ, ComponentArray())
+    dist = DiscreteTimeDiscreteStatesHMM(
+        [0.6 0.4 0.0; 0.0 0.7 0.3; 0.0 0.0 1.0],
+        (
+            Categorical([1.0, 0.0, 0.0]),
+            Categorical([0.0, 1.0, 0.0]),
+            Categorical([0.0, 0.0, 1.0]),
+        ),
+        Categorical([1.0, 0.0, 0.0])
+    )
+    expected = _recursive_hmm_loglikelihood(fill(dist, nrow(df)), df.y)
 
-    A = [0.85 0.15; 0.25 0.75]
-    init = [0.6, 0.4]
-    p_emit_1 = [pdf(Bernoulli(0.9), 1), pdf(Bernoulli(0.2), 1)]
-    p_emit_0 = [pdf(Bernoulli(0.9), 0), pdf(Bernoulli(0.2), 0)]
-
-    p_hidden_1 = transpose(A) * init
-    ll1 = log(sum(p_hidden_1 .* p_emit_1))
-    post_1 = p_hidden_1 .* p_emit_1
-    post_1 ./= sum(post_1)
-
-    p_hidden_2 = transpose(A) * post_1
-    p_hidden_3 = transpose(A) * p_hidden_2
-    ll3 = log(sum(p_hidden_3 .* p_emit_0))
-
-    ll_expected = ll1 + ll3
-    @test ll ≈ ll_expected atol=1e-12
+    @test isfinite(ll)
+    @test isapprox(ll, expected; atol=1e-12)
 end
 
 @testset "Discrete-time HMM ForwardDiff" begin
@@ -142,7 +166,7 @@ end
     @test length(g) == length(θ0)
 end
 
-@testset "Discrete-time HMM MLE/MAP/MCMC" begin
+@testset "Discrete-time HMM MLE/MAP/MCMC/VI" begin
     model = @Model begin
         @covariates begin
             t = Covariate()
@@ -184,4 +208,8 @@ end
     res_mcmc = fit_model(dm, NoLimits.MCMC(; turing_kwargs=(n_samples=2, n_adapt=2, progress=false)))
     @test res_mcmc isa FitResult
     @test NoLimits.get_chain(res_mcmc) isa MCMCChains.Chains
+
+    res_vi = fit_model(dm, NoLimits.VI(; turing_kwargs=(max_iter=10, progress=false)))
+    @test res_vi isa FitResult
+    @test isfinite(NoLimits.get_objective(res_vi))
 end

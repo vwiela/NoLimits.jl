@@ -65,13 +65,15 @@ end
     if ll_cache isa Vector
         return ll_cache
     elseif ll_cache isa _LLCache
-        return build_ll_cache(dm;
-                              ode_args=ll_cache.ode_args,
-                              ode_kwargs=ll_cache.ode_kwargs,
-                              force_saveat=ll_cache.saveat_cache !== nothing,
-                              nthreads=nthreads)
+        caches = build_ll_cache(dm;
+                                ode_args=ll_cache.ode_args,
+                                ode_kwargs=ll_cache.ode_kwargs,
+                                force_saveat=ll_cache.saveat_cache !== nothing,
+                                nthreads=nthreads)
+        return caches isa Vector ? caches : [caches]
     else
-        return build_ll_cache(dm; nthreads=nthreads)
+        caches = build_ll_cache(dm; nthreads=nthreads)
+        return caches isa Vector ? caches : [caches]
     end
 end
 
@@ -856,6 +858,12 @@ end
 
 @inline _saem_hmm_state_emission_probs(::Any, ::Any, ::Type) = nothing
 
+@inline _saem_hmm_transition_matrix(dist::DiscreteTimeDiscreteStatesHMM, T::Type) =
+    T.(dist.transition_matrix)
+
+@inline _saem_hmm_transition_matrix(dist::MVDiscreteTimeDiscreteStatesHMM, T::Type) =
+    T.(dist.transition_matrix)
+
 function _saem_hmm_smoothed_gamma(dists::Vector, ys::Vector, T::Type)
     n_time = length(dists)
     n_time == length(ys) || return (nothing, false)
@@ -867,45 +875,37 @@ function _saem_hmm_smoothed_gamma(dists::Vector, ys::Vector, T::Type)
 
     K = first_dist.n_states
     alpha = zeros(T, K, n_time)
-    beta = zeros(T, K, n_time)
-    emit = zeros(T, K, n_time)
+    beta = ones(T, K, n_time)
+    emissions = zeros(T, K, n_time)
     scales = zeros(T, n_time)
-    trans = Vector{Matrix{T}}(undef, n_time)
-
-    p0 = T.(first_dist.initial_dist.p)
+    prior = nothing
     for t in 1:n_time
         dist_t = dists[t]
         typeof(dist_t) === typeof(first_dist) || return (nothing, false)
-        A = T.(dist_t.transition_matrix)
-        trans[t] = A
-        b = _saem_hmm_state_emission_probs(dist_t, ys[t], T)
+        dist_use = _hmm_with_prior(dist_t, prior)
+        b = _saem_hmm_state_emission_probs(dist_use, ys[t], T)
         b === nothing && return (nothing, false)
-        emit[:, t] .= b
-
-        pred = if t == 1
-            transpose(A) * p0
-        else
-            transpose(A) * view(alpha, :, t - 1)
-        end
+        pred = T.(probabilities_hidden_states(dist_use))
         unnorm = pred .* b
         c = sum(unnorm)
         (isfinite(c) && c > zero(T)) || return (nothing, false)
         alpha[:, t] .= unnorm ./ c
+        emissions[:, t] .= b
         scales[t] = c
+        prior = alpha[:, t]
     end
 
-    beta[:, n_time] .= one(T)
     for t in (n_time - 1):-1:1
-        A_next = trans[t + 1]
-        tmp = view(emit, :, t + 1) .* view(beta, :, t + 1)
-        c = scales[t + 1]
-        (isfinite(c) && c > zero(T)) || return (nothing, false)
-        beta[:, t] .= (A_next * tmp) ./ c
+        trans_next = _saem_hmm_transition_matrix(dists[t + 1], T)
+        beta[:, t] .= trans_next * (emissions[:, t + 1] .* beta[:, t + 1])
+        c_next = scales[t + 1]
+        (isfinite(c_next) && c_next > zero(T)) || return (nothing, false)
+        beta[:, t] ./= c_next
     end
 
     gamma = alpha .* beta
     for t in 1:n_time
-        s = sum(view(gamma, :, t))
+        s = sum(gamma[:, t])
         (isfinite(s) && s > zero(T)) || return (nothing, false)
         gamma[:, t] ./= s
     end
@@ -1054,11 +1054,13 @@ function _saem_collect_hmm_stats_individual(dm::DataModel,
     end
 
     time_col = _get_col(dm.df, dm.config.time_col)[obs_rows]
+    rowwise_re = _needs_rowwise_random_effects(dm, idx; obs_only=true)
     for i in eachindex(obs_rows)
         vary = vary_cache === nothing ? _varying_at(dm, ind, i, time_col) : vary_cache[i]
+        η_row = _row_random_effects_at(dm, idx, i, η_ind, rowwise_re; obs_only=true)
         obs = sol_accessors === nothing ?
-              calculate_formulas_obs(model, θ, η_ind, const_cov, vary) :
-              calculate_formulas_obs(model, θ, η_ind, const_cov, vary, sol_accessors)
+              calculate_formulas_obs(model, θ, η_row, const_cov, vary) :
+              calculate_formulas_obs(model, θ, η_row, const_cov, vary, sol_accessors)
         for col in keys(hmm_emission_params)
             dist = getproperty(obs, col)
             _saem_is_hmm_distribution(dist) || return (NamedTuple(), false)
@@ -1206,11 +1208,13 @@ function _saem_collect_outcome_stats_individual(dm::DataModel,
     obs_cols = dm.config.obs_cols
     time_col = _get_col(dm.df, dm.config.time_col)[obs_rows]
     stats_dict = Dict{Symbol, Any}()
+    rowwise_re = _needs_rowwise_random_effects(dm, idx; obs_only=true)
     for i in eachindex(obs_rows)
         vary = vary_cache === nothing ? _varying_at(dm, ind, i, time_col) : vary_cache[i]
+        η_row = _row_random_effects_at(dm, idx, i, η_ind, rowwise_re; obs_only=true)
         obs = sol_accessors === nothing ?
-              calculate_formulas_obs(model, θ, η_ind, const_cov, vary) :
-              calculate_formulas_obs(model, θ, η_ind, const_cov, vary, sol_accessors)
+              calculate_formulas_obs(model, θ, η_row, const_cov, vary) :
+              calculate_formulas_obs(model, θ, η_row, const_cov, vary, sol_accessors)
         for col in obs_cols
             haskey(obs_targets, col) || continue
             dist = getproperty(obs, col)
@@ -1842,10 +1846,12 @@ function _saem_glm_supported(dm::DataModel,
         for i in info.inds
             ind = dm.individuals[i]
             obs_rows = dm.row_groups.obs_rows[i]
+            rowwise_re = _needs_rowwise_random_effects(dm, i; obs_only=true)
             for j in eachindex(obs_rows)
                 v = _varying_at(dm, ind, j, _get_col(dm.df, dm.config.time_col)[obs_rows])
                 η_ind = _build_eta_ind(dm, i, info, b, const_cache, θ)
-                obs = calculate_formulas_obs(model, θ, η_ind, ind.const_cov, v)
+                η_row = _row_random_effects_at(dm, i, j, η_ind, rowwise_re; obs_only=true)
+                obs = calculate_formulas_obs(model, θ, η_row, ind.const_cov, v)
                 for col in dm.config.obs_cols
                     dist = getproperty(obs, col)
                     dist isa allowed || return false

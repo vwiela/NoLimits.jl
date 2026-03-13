@@ -8,6 +8,21 @@ using LinearAlgebra
 using Random
 using Turing
 
+function _recursive_hmm_loglikelihood(dists, ys)
+    prior = nothing
+    ll = 0.0
+    for (dist, y) in zip(dists, ys)
+        dist_use = prior === nothing ? dist : NoLimits._hmm_with_initial_probs(dist, prior)
+        if ismissing(y)
+            prior = probabilities_hidden_states(dist_use)
+        else
+            ll += logpdf(dist_use, y)
+            prior = posterior_hidden_states(dist_use, y)
+        end
+    end
+    return ll
+end
+
 # ---------------------------------------------------------------------------
 # Block A: Standalone struct tests
 # ---------------------------------------------------------------------------
@@ -281,8 +296,99 @@ end
     dm = DataModel(model, df; primary_id=:ID, time_col=:t)
     θ  = get_θ0_untransformed(dm.model.fixed.fixed)
     ll = NoLimits.loglikelihood(dm, θ, ComponentArray())
+    @test isfinite(ll)
+end
+
+@testset "MVDiscreteTimeHMM: loglikelihood uses recursive filtering" begin
+    model = @Model begin
+        @covariates begin
+            t = Covariate()
+        end
+        @fixedEffects begin
+            dummy = RealNumber(0.0)
+        end
+        @formulas begin
+            P  = [0.6 0.4 0.0;
+                  0.0 0.7 0.3;
+                  0.0 0.0 1.0]
+            e1 = (Categorical([1.0, 0.0, 0.0]),
+                  Categorical([1.0, 0.0, 0.0]))
+            e2 = (Categorical([0.0, 1.0, 0.0]),
+                  Categorical([0.0, 1.0, 0.0]))
+            e3 = (Categorical([0.0, 0.0, 1.0]),
+                  Categorical([0.0, 0.0, 1.0]))
+            y ~ MVDiscreteTimeDiscreteStatesHMM(P, (e1, e2, e3), Categorical([1.0, 0.0, 0.0]))
+        end
+    end
+
+    df = DataFrame(
+        ID = [1, 1, 1],
+        t  = [0.0, 1.0, 2.0],
+        y  = [[2, 2], [2, 2], [3, 3]],
+    )
+
+    dm = DataModel(model, df; primary_id=:ID, time_col=:t)
+    θ  = get_θ0_untransformed(dm.model.fixed.fixed)
+    ll = NoLimits.loglikelihood(dm, θ, ComponentArray())
+    dist = MVDiscreteTimeDiscreteStatesHMM(
+        [0.6 0.4 0.0; 0.0 0.7 0.3; 0.0 0.0 1.0],
+        (
+            (Categorical([1.0, 0.0, 0.0]), Categorical([1.0, 0.0, 0.0])),
+            (Categorical([0.0, 1.0, 0.0]), Categorical([0.0, 1.0, 0.0])),
+            (Categorical([0.0, 0.0, 1.0]), Categorical([0.0, 0.0, 1.0])),
+        ),
+        Categorical([1.0, 0.0, 0.0])
+    )
+    expected = _recursive_hmm_loglikelihood(fill(dist, nrow(df)), df.y)
 
     @test isfinite(ll)
+    @test isapprox(ll, expected; atol=1e-12)
+end
+
+@testset "MVDiscreteTimeHMM: missing observations still propagate hidden state" begin
+    model = @Model begin
+        @covariates begin
+            t = Covariate()
+        end
+        @fixedEffects begin
+            dummy = RealNumber(0.0)
+        end
+        @formulas begin
+            P  = [0.6 0.4 0.0;
+                  0.0 0.7 0.3;
+                  0.0 0.0 1.0]
+            e1 = (Categorical([1.0, 0.0, 0.0]),
+                  Categorical([1.0, 0.0, 0.0]))
+            e2 = (Categorical([0.0, 1.0, 0.0]),
+                  Categorical([0.0, 1.0, 0.0]))
+            e3 = (Categorical([0.0, 0.0, 1.0]),
+                  Categorical([0.0, 0.0, 1.0]))
+            y ~ MVDiscreteTimeDiscreteStatesHMM(P, (e1, e2, e3), Categorical([1.0, 0.0, 0.0]))
+        end
+    end
+
+    df = DataFrame(
+        ID = [1, 1, 1],
+        t  = [0.0, 1.0, 2.0],
+        y  = Any[[2, 2], missing, [3, 3]],
+    )
+
+    dm = DataModel(model, df; primary_id=:ID, time_col=:t)
+    θ  = get_θ0_untransformed(dm.model.fixed.fixed)
+    ll = NoLimits.loglikelihood(dm, θ, ComponentArray())
+    dist = MVDiscreteTimeDiscreteStatesHMM(
+        [0.6 0.4 0.0; 0.0 0.7 0.3; 0.0 0.0 1.0],
+        (
+            (Categorical([1.0, 0.0, 0.0]), Categorical([1.0, 0.0, 0.0])),
+            (Categorical([0.0, 1.0, 0.0]), Categorical([0.0, 1.0, 0.0])),
+            (Categorical([0.0, 0.0, 1.0]), Categorical([0.0, 0.0, 1.0])),
+        ),
+        Categorical([1.0, 0.0, 0.0])
+    )
+    expected = _recursive_hmm_loglikelihood(fill(dist, nrow(df)), df.y)
+
+    @test isfinite(ll)
+    @test isapprox(ll, expected; atol=1e-12)
 end
 
 @testset "MVDiscreteTimeHMM: ForwardDiff through full model" begin
@@ -316,7 +422,7 @@ end
     @test all(isfinite, g)
 end
 
-@testset "MVDiscreteTimeHMM: MLE and MAP" begin
+@testset "MVDiscreteTimeHMM: MLE/MAP/MCMC/VI" begin
     model = @Model begin
         @covariates begin
             t = Covariate()
@@ -354,4 +460,8 @@ end
         turing_kwargs=(n_samples=15, n_adapt=5, progress=false)))
     @test res_mcmc isa FitResult
     @test NoLimits.get_chain(res_mcmc) isa MCMCChains.Chains
+
+    res_vi = fit_model(dm, NoLimits.VI(; turing_kwargs=(max_iter=10, progress=false)))
+    @test res_vi isa FitResult
+    @test isfinite(NoLimits.get_objective(res_vi))
 end

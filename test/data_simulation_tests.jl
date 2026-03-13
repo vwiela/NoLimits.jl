@@ -1,6 +1,7 @@
 using Test
 using NoLimits
 using DataFrames
+using DataInterpolations
 using Distributions
 using Random
 using Lux
@@ -461,4 +462,129 @@ end
 
     @test :η in propertynames(sim)
     @test any(sim.y .!= df.y)
+end
+
+@testset "simulate_data uses row-specific random effects for varying non-ODE groups" begin
+    model = @Model begin
+        @fixedEffects begin
+            σ = RealNumber(1.0e-6, scale=:log)
+        end
+
+        @covariates begin
+            t = Covariate()
+        end
+
+        @randomEffects begin
+            η_year = RandomEffect(Normal(0.0, 1.0); column=:YEAR)
+        end
+
+        @formulas begin
+            y ~ Normal(η_year, σ)
+        end
+    end
+
+    df = DataFrame(
+        ID = [1, 1, 1, 2, 2],
+        YEAR = [:A, :B, :B, :A, :C],
+        t = [0.0, 1.0, 2.0, 0.0, 1.0],
+        y = zeros(5)
+    )
+
+    dm = DataModel(model, df; primary_id=:ID, time_col=:t)
+    sim = simulate_data(dm; rng=MersenneTwister(21))
+
+    @test sim.η_year[1] == sim.η_year[4]
+    @test sim.η_year[2] == sim.η_year[3]
+    @test isapprox(sim.y[1], sim.η_year[1]; atol=1.0e-3)
+    @test isapprox(sim.y[2], sim.η_year[2]; atol=1.0e-3)
+    @test isapprox(sim.y[3], sim.η_year[3]; atol=1.0e-3)
+    @test isapprox(sim.y[4], sim.η_year[4]; atol=1.0e-3)
+    @test isapprox(sim.y[5], sim.η_year[5]; atol=1.0e-3)
+end
+
+@testset "simulate_data propagates discrete HMM hidden states forward" begin
+    model = @Model begin
+        @fixedEffects begin
+            dummy = RealNumber(0.0)
+        end
+
+        @covariates begin
+            t = Covariate()
+        end
+
+        @formulas begin
+            P = [0.6 0.4 0.0;
+                 0.0 0.7 0.3;
+                 0.0 0.0 1.0]
+            y ~ DiscreteTimeDiscreteStatesHMM(
+                P,
+                (
+                    Categorical([1.0, 0.0, 0.0]),
+                    Categorical([0.0, 1.0, 0.0]),
+                    Categorical([0.0, 0.0, 1.0]),
+                ),
+                Categorical([1.0, 0.0, 0.0]),
+            )
+        end
+    end
+
+    n_id = 200
+    n_t = 6
+    df = DataFrame(
+        ID = repeat(1:n_id; inner=n_t),
+        t = repeat(collect(0.0:(n_t - 1)); outer=n_id),
+        y = ones(Int, n_id * n_t),
+    )
+
+    dm = DataModel(model, df; primary_id=:ID, time_col=:t)
+    sim = simulate_data(dm; rng=MersenneTwister(123))
+    paths = [Vector{Int}(sim.y[sim.ID .== id]) for id in 1:n_id]
+
+    @test all(path -> all(diff(path) .>= 0), paths)
+    @test any(path -> any(==(3), path), paths)
+end
+
+@testset "simulate_data propagates continuous-time HMM hidden states forward" begin
+    model = @Model begin
+        @fixedEffects begin
+            dummy = RealNumber(0.0)
+        end
+
+        @covariates begin
+            t = Covariate()
+            dt = Covariate()
+        end
+
+        @formulas begin
+            Q = [-1.2 1.2 0.0;
+                  0.0 -1.0 1.0;
+                  0.0 0.0 0.0]
+            y ~ ContinuousTimeDiscreteStatesHMM(
+                Q,
+                (
+                    Categorical([1.0, 0.0, 0.0]),
+                    Categorical([0.0, 1.0, 0.0]),
+                    Categorical([0.0, 0.0, 1.0]),
+                ),
+                Categorical([1.0, 0.0, 0.0]),
+                dt,
+            )
+        end
+    end
+
+    n_id = 200
+    n_t = 6
+    df = DataFrame(
+        ID = repeat(1:n_id; inner=n_t),
+        t = repeat(collect(0.0:(n_t - 1)); outer=n_id),
+        dt = ones(n_id * n_t),
+        y = ones(Int, n_id * n_t),
+    )
+
+    dm = DataModel(model, df; primary_id=:ID, time_col=:t)
+    sim = simulate_data(dm; rng=MersenneTwister(123))
+    paths = [Vector{Int}(sim.y[sim.ID .== id]) for id in 1:n_id]
+
+    @test all(path -> all(diff(path) .>= 0), paths)
+    @test any(path -> any(==(3), path), paths)
 end

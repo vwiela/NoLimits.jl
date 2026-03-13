@@ -42,21 +42,54 @@ function _rngs_for_serialization(rng, serialization)
     return rng
 end
 
+function _sampled_random_effects_for_individual(dm::DataModel, idx::Int, re_samples)
+    re_names = get_re_names(dm.model.random.random)
+    isempty(re_names) && return ComponentArray(NamedTuple())
+    ind = dm.individuals[idx]
+    info = dm.re_group_info.index_by_individual
+    nt_pairs = Pair{Symbol, Any}[]
+    for re in re_names
+        re_info = getfield(info, re)
+        nlevels = length(getfield(ind.re_groups, re))
+        local_level_ids = fill(0, nlevels)
+        level_ids_all = re_info.level_ids_all[idx]
+        unique_pos_all = re_info.unique_pos_all[idx]
+        @inbounds for k in eachindex(level_ids_all)
+            pos = unique_pos_all[k]
+            local_level_ids[pos] == 0 && (local_level_ids[pos] = level_ids_all[k])
+        end
+        sample = re_samples[re][local_level_ids[1]]
+        if nlevels == 1
+            push!(nt_pairs, re => (sample isa AbstractVector ? copy(sample) : sample))
+            continue
+        end
+        if sample isa AbstractVector
+            sample_copy = copy(sample)
+            vals_re = Vector{typeof(sample_copy)}(undef, nlevels)
+            vals_re[1] = sample_copy
+            @inbounds for pos in 2:nlevels
+                vals_re[pos] = copy(re_samples[re][local_level_ids[pos]])
+            end
+            push!(nt_pairs, re => vals_re)
+        else
+            vals_re = Vector{typeof(sample)}(undef, nlevels)
+            vals_re[1] = sample
+            @inbounds for pos in 2:nlevels
+                vals_re[pos] = re_samples[re][local_level_ids[pos]]
+            end
+            push!(nt_pairs, re => vals_re)
+        end
+    end
+    return ComponentArray(NamedTuple(nt_pairs))
+end
+
 function _simulate_individual!(df::DataFrame, dm::DataModel, idx::Int, θ, re_samples, rng, replace_missings::Bool)
     model = dm.model
     ind = dm.individuals[idx]
-    rows = dm.row_groups.rows[idx]
     obs_rows = dm.row_groups.obs_rows[idx]
     const_cov = ind.const_cov
 
-    re_names = get_re_names(model.random.random)
-    re_info = dm.re_group_info.index_by_row
-    re_pairs = Pair{Symbol, Any}[]
-    for re in re_names
-        group_idx = getfield(re_info, re)[rows[1]]
-        push!(re_pairs, re => re_samples[re][group_idx])
-    end
-    η = ComponentArray(NamedTuple(re_pairs))
+    η = _sampled_random_effects_for_individual(dm, idx, re_samples)
 
     sol_accessors = nothing
     if model.de.de !== nothing
@@ -99,17 +132,32 @@ function _simulate_individual!(df::DataFrame, dm::DataModel, idx::Int, θ, re_sa
     end
 
     obs_cols = dm.config.obs_cols
+    rowwise_re = _needs_rowwise_random_effects(dm, idx; obs_only=true)
+    hmm_states = Dict{Symbol, Int}()
     for (i, row) in enumerate(obs_rows)
         vary = _varying_at(dm, ind, i, row)
+        η_row = _row_random_effects_at(dm, idx, i, η, rowwise_re; obs_only=true)
         obs = sol_accessors === nothing ?
-              calculate_formulas_obs(model, θ, η, const_cov, vary) :
-              calculate_formulas_obs(model, θ, η, const_cov, vary, sol_accessors)
+              calculate_formulas_obs(model, θ, η_row, const_cov, vary) :
+              calculate_formulas_obs(model, θ, η_row, const_cov, vary, sol_accessors)
         for col in obs_cols
-            if !replace_missings && ismissing(df[row, col])
-                continue
-            end
             dist = getproperty(obs, col)
-            val = rand(rng, dist)
+            if _is_hmm_dist(dist)
+                prev_state = get(hmm_states, col, 0)
+                state = prev_state == 0 ?
+                        _sample_hmm_hidden_state(rng, dist) :
+                        _sample_hmm_hidden_state(rng, dist, prev_state)
+                hmm_states[col] = state
+                if !replace_missings && ismissing(df[row, col])
+                    continue
+                end
+                val = _hmm_emission_rand(rng, dist, state)
+            else
+                if !replace_missings && ismissing(df[row, col])
+                    continue
+                end
+                val = rand(rng, dist)
+            end
             if val isa Number && (isnan(val) || isinf(val))
                 _warn_bad_value(dm, row, col, dist, val)
             end
@@ -122,18 +170,10 @@ end
 function _simulate_individual_values(dm::DataModel, idx::Int, θ, re_samples, rng, replace_missings::Bool)
     model = dm.model
     ind = dm.individuals[idx]
-    rows = dm.row_groups.rows[idx]
     obs_rows = dm.row_groups.obs_rows[idx]
     const_cov = ind.const_cov
 
-    re_names = get_re_names(model.random.random)
-    re_info = dm.re_group_info.index_by_row
-    re_pairs = Pair{Symbol, Any}[]
-    for re in re_names
-        group_idx = getfield(re_info, re)[rows[1]]
-        push!(re_pairs, re => re_samples[re][group_idx])
-    end
-    η = ComponentArray(NamedTuple(re_pairs))
+    η = _sampled_random_effects_for_individual(dm, idx, re_samples)
 
     sol_accessors = nothing
     if model.de.de !== nothing
@@ -181,18 +221,34 @@ function _simulate_individual_values(dm::DataModel, idx::Int, θ, re_samples, rn
         out[col] = Vector{Any}(undef, length(obs_rows))
     end
 
+    rowwise_re = _needs_rowwise_random_effects(dm, idx; obs_only=true)
+    hmm_states = Dict{Symbol, Int}()
     for (i, row) in enumerate(obs_rows)
         vary = _varying_at(dm, ind, i, row)
+        η_row = _row_random_effects_at(dm, idx, i, η, rowwise_re; obs_only=true)
         obs = sol_accessors === nothing ?
-              calculate_formulas_obs(model, θ, η, const_cov, vary) :
-              calculate_formulas_obs(model, θ, η, const_cov, vary, sol_accessors)
+              calculate_formulas_obs(model, θ, η_row, const_cov, vary) :
+              calculate_formulas_obs(model, θ, η_row, const_cov, vary, sol_accessors)
         for col in obs_cols
-            if !replace_missings && ismissing(dm.df[row, col])
-                out[col][i] = nothing
-                continue
-            end
             dist = getproperty(obs, col)
-            val = rand(rng, dist)
+            if _is_hmm_dist(dist)
+                prev_state = get(hmm_states, col, 0)
+                state = prev_state == 0 ?
+                        _sample_hmm_hidden_state(rng, dist) :
+                        _sample_hmm_hidden_state(rng, dist, prev_state)
+                hmm_states[col] = state
+                if !replace_missings && ismissing(dm.df[row, col])
+                    out[col][i] = nothing
+                    continue
+                end
+                val = _hmm_emission_rand(rng, dist, state)
+            else
+                if !replace_missings && ismissing(dm.df[row, col])
+                    out[col][i] = nothing
+                    continue
+                end
+                val = rand(rng, dist)
+            end
             if val isa Number && (isnan(val) || isinf(val))
                 _warn_bad_value(dm, row, col, dist, val)
             end

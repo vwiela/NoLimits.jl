@@ -284,7 +284,7 @@ end
 function Distributions.logpdf(hmm::ContinuousTimeDiscreteStatesHMM, y::Real)
     log_p_hidden = log.(probabilities_hidden_states(hmm))
     log_p_obs = logpdf.(hmm.emission_dists, Ref(y))
-    return Lux.logsumexp(log_p_hidden .+ log_p_obs)
+    return _hmm_logsumexp(log_p_hidden .+ log_p_obs)
 end
 
 function Distributions.rand(rng::AbstractRNG, hmm::ContinuousTimeDiscreteStatesHMM)
