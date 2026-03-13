@@ -31,13 +31,15 @@ struct MLE{O, K, A, L, U} <: FittingMethod
     adtype::A
     lb::L
     ub::U
+    ignore_model_bounds::Bool
 end
 
 MLE(; optimizer=OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracking()),
      optim_kwargs=NamedTuple(),
      adtype=Optimization.AutoForwardDiff(),
      lb=nothing,
-     ub=nothing) = MLE(optimizer, optim_kwargs, adtype, lb, ub)
+     ub=nothing,
+     ignore_model_bounds=false) = MLE(optimizer, optim_kwargs, adtype, lb, ub, ignore_model_bounds)
 
 """
     MLEResult{S, O, I, R, N} <: MethodResult
@@ -122,7 +124,7 @@ function _fit_no_re(dm::DataModel, method;
     upper_t_free = ComponentArray(NamedTuple{Tuple(free_names)}(Tuple(getproperty(upper_t, n) for n in free_names)))
     lower_t_free_vec = collect(lower_t_free)
     upper_t_free_vec = collect(upper_t_free)
-    use_bounds = !(all(isinf, lower_t_free_vec) && all(isinf, upper_t_free_vec))
+    use_bounds = !method.ignore_model_bounds && !(all(isinf, lower_t_free_vec) && all(isinf, upper_t_free_vec))
     normalize_bound = function(bound, fallback)
         if bound === nothing
             return fallback

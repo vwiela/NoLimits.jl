@@ -214,6 +214,40 @@ end
     @test length(g) == length(θ0)
 end
 
+@testset "HMM ForwardDiff remains finite for tiny hidden-state masses" begin
+    emissions = (
+        Categorical([0.99999998, 1e-8, 1e-8]),
+        Categorical([1e-8, 0.99999998, 1e-8]),
+        Categorical([1e-8, 1e-8, 0.99999998]),
+    )
+    ys = vcat(fill(2, 5), fill(3, 80))
+    dts = vcat([0.0], fill(0.12, length(ys) - 1))
+
+    function seq_ll(x)
+        q12 = exp(-1.4 + x)
+        q13 = exp(-2.0 + x)
+        q23 = exp(-0.5 + x)
+        Q = [-(q12 + q13) q12 q13;
+             0.0          -q23 q23;
+             0.0           0.0 0.0]
+
+        prior = nothing
+        ll = zero(x)
+        for i in eachindex(ys)
+            dist = ContinuousTimeDiscreteStatesHMM(Q, emissions, Categorical([0.6, 0.3, 0.1]), dts[i])
+            dist_use = prior === nothing ? dist : NoLimits._hmm_with_initial_probs(dist, prior)
+            ll += logpdf(dist_use, ys[i])
+            prior = posterior_hidden_states(dist_use, ys[i])
+        end
+        return ll
+    end
+
+    ll0 = seq_ll(0.0)
+    g = ForwardDiff.derivative(seq_ll, 0.0)
+    @test isfinite(ll0)
+    @test isfinite(g)
+end
+
 @testset "HMM MLE/MAP/MCMC/VI optimization" begin
     model = @Model begin
         @fixedEffects begin

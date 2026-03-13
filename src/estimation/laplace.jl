@@ -2133,6 +2133,7 @@ struct Laplace{O, K, A, IO, HO, CO, MS, FP, L, U} <: FittingMethod
     fastpath::FP
     lb::L
     ub::U
+    ignore_model_bounds::Bool
 end
 
 Laplace(; optimizer=OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracking()),
@@ -2163,14 +2164,15 @@ Laplace(; optimizer=OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracki
         fastpath_options=nothing,
         fastpath_mode=:auto,
         lb=nothing,
-        ub=nothing) = begin
+        ub=nothing,
+        ignore_model_bounds=false) = begin
     inner = inner_options === nothing ? LaplaceInnerOptions(inner_optimizer, inner_kwargs, inner_adtype, inner_grad_tol) : inner_options
     hess = hessian_options === nothing ? LaplaceHessianOptions(jitter, max_tries, jitter_growth, adaptive_jitter, jitter_scale, use_trace_logdet_grad, use_hutchinson, hutchinson_n) : hessian_options
     cache = cache_options === nothing ? LaplaceCacheOptions(theta_tol) : cache_options
     ms = multistart_options === nothing ? LaplaceMultistartOptions(multistart_n, multistart_k, multistart_grad_tol, multistart_max_rounds, multistart_sampling) : multistart_options
     fp = fastpath_options === nothing ? LaplaceFastpathOptions(fastpath_mode) : fastpath_options
     fp = _resolve_laplace_fastpath_options(fp)
-    Laplace(optimizer, optim_kwargs, adtype, inner, hess, cache, ms, fp, lb, ub)
+    Laplace(optimizer, optim_kwargs, adtype, inner, hess, cache, ms, fp, lb, ub, ignore_model_bounds)
 end
 
 """
@@ -2645,7 +2647,7 @@ function _fit_model(dm::DataModel, method::Laplace, args...;
     lower_t, upper_t = get_bounds_transformed(fe)
     lower_t_free = lower_t[free_names]
     upper_t_free = upper_t[free_names]
-    use_bounds = !(all(isinf, lower_t_free) && all(isinf, upper_t_free))
+    use_bounds = !method.ignore_model_bounds && !(all(isinf, lower_t_free) && all(isinf, upper_t_free))
     user_bounds = method.lb !== nothing || method.ub !== nothing
     if user_bounds && !isempty(keys(constants))
         @info "Bounds for constant parameters are ignored." constants=collect(keys(constants))
@@ -2861,7 +2863,7 @@ function _fit_model(dm::DataModel, method::LaplaceMAP, args...;
     lower_t, upper_t = get_bounds_transformed(fe)
     lower_t_free = lower_t[free_names]
     upper_t_free = upper_t[free_names]
-    use_bounds = !(all(isinf, lower_t_free) && all(isinf, upper_t_free))
+    use_bounds = !method.ignore_model_bounds && !(all(isinf, lower_t_free) && all(isinf, upper_t_free))
     user_bounds = method.lb !== nothing || method.ub !== nothing
     if user_bounds && !isempty(keys(constants))
         @info "Bounds for constant parameters are ignored." constants=collect(keys(constants))
