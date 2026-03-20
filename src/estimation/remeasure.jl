@@ -132,7 +132,7 @@ function build_gaussian_re_from_batch(
                 # PDMat stores the pre-computed Cholesky; extract it to avoid
                 # recomputing and for Dual compatibility when dist.Σ.chol exists.
                 Σ = dist.Σ
-                if Σ isa PDMats.PDMat && isdefined(Σ, :chol)
+                if Σ isa Distributions.PDMats.PDMat && isdefined(Σ, :chol)
                     L_k = Matrix(Σ.chol.L)
                 else
                     # Fallback: compute Cholesky from the raw matrix.
@@ -317,7 +317,7 @@ function build_re_measure_from_batch(
             elseif dist isa Distributions.MvNormal
                 μ_k = Vector(Distributions.mean(dist))
                 Σ = dist.Σ
-                if Σ isa PDMats.PDMat && isdefined(Σ, :chol)
+                if Σ isa Distributions.PDMats.PDMat && isdefined(Σ, :chol)
                     L_k = Matrix(Σ.chol.L)
                 else
                     Σ_mat = Σ isa AbstractMatrix ? Σ : Matrix(Σ)
