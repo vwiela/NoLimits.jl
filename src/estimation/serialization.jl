@@ -151,15 +151,9 @@ struct SavedFitResult{M, R, S, D, K, DF}
     data_model_config::Union{Nothing, _SavedDataModelConfig}
 end
 
-struct SavedMultistartFitResult{D, R, RE, SK, EK, B, DF}
+struct SavedMultistartFitResult{M, R, RE, SK, EK, B, DF}
     format_version::Int
-    # Multistart method fields (rng is dropped — not serializable and not needed for loading)
-    method_dists::D
-    method_n_draws_requested::Int
-    method_n_draws_used::Int
-    method_sampling::Symbol
-    method_serialization_kind::Symbol
-    # Results
+    method::M                        # inner FittingMethod (MLE, MAP, etc.)
     saved_results_ok::R
     saved_results_err::RE
     starts_ok::SK
@@ -262,21 +256,16 @@ _strip_partial_result(::Nothing)    = nothing
 _strip_partial_result(r)            = nothing  # unknown type; drop silently
 
 function _strip_fit_result(res::MultistartFitResult; include_data::Bool=false)
-    m         = res.method
     saved_ok  = SavedFitResult[_strip_fit_result(r; include_data=false) for r in res.results_ok]
     saved_err = [_strip_partial_result(r) for r in res.results_err]
     err_strs  = String[sprint(showerror, e) for e in res.errors_err]
     # Take df/config from the best result's data_model
     best_dm = isempty(res.results_ok) ? nothing : res.results_ok[res.best_idx].data_model
-    df      = (include_data && best_dm !== nothing) ? best_dm.df                     : nothing
-    config  = (include_data && best_dm !== nothing) ? _build_saved_config(best_dm)   : nothing
+    df      = (include_data && best_dm !== nothing) ? best_dm.df                   : nothing
+    config  = (include_data && best_dm !== nothing) ? _build_saved_config(best_dm) : nothing
     return SavedMultistartFitResult(
         _SERIALIZATION_FORMAT_VERSION,
-        m.dists,
-        m.n_draws_requested,
-        m.n_draws_used,
-        m.sampling,
-        _ensemble_to_symbol(m.serialization),
+        res.method,          # inner method (MLE/MAP/etc.), stored directly
         saved_ok,
         saved_err,
         res.starts_ok,
@@ -378,18 +367,12 @@ _reconstruct_partial_result(r::SavedFitResult, model, dm) = _reconstruct_fit_res
 _reconstruct_partial_result(_, model, dm) = nothing
 
 function _reconstruct_multistart(saved::SavedMultistartFitResult, model, dm)
-    dm_r = _resolve_dm(saved.df, saved.data_model_config, model, dm)
-    method = Multistart(saved.method_dists,
-                        saved.method_n_draws_requested,
-                        saved.method_n_draws_used,
-                        saved.method_sampling,
-                        _symbol_to_serialization(saved.method_serialization_kind),
-                        default_rng())
+    dm_r        = _resolve_dm(saved.df, saved.data_model_config, model, dm)
     results_ok  = FitResult[_reconstruct_fit_result(r, model, dm_r)
                              for r in saved.saved_results_ok]
     results_err = [_reconstruct_partial_result(r, model, dm_r)
                    for r in saved.saved_results_err]
-    return MultistartFitResult(method, results_ok, results_err,
+    return MultistartFitResult(saved.method, results_ok, results_err,
                                saved.starts_ok, saved.starts_err,
                                saved.errors_err_strings,
                                saved.best_idx, saved.scores_ok)
