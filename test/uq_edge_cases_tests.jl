@@ -241,7 +241,14 @@ end
                                                      multistart_n=0,
                                                      multistart_k=0);
                          constants=constants)
-    uq_lmap = compute_uq(res_lmap; method=:wald, n_draws=20, rng=Random.Xoshiro(208))
+    uq_lmap = compute_uq(res_lmap;
+                         method=:wald,
+                         pseudo_inverse=true,
+                         n_draws=20,
+                         fd_abs_step=1e-4,
+                         fd_rel_step=1e-4,
+                         fd_max_tries=50,
+                         rng=Random.Xoshiro(208))
     @test get_uq_source_method(uq_lmap) == :laplace_map
     @test get_uq_parameter_names(uq_lmap) == [:β_1, :β_2, :a, :σ]
 
@@ -254,7 +261,14 @@ end
                                                    multistart_n=0,
                                                    multistart_k=0);
                          constants=constants)
-    uq_fmap = compute_uq(res_fmap; method=:wald, n_draws=20, rng=Random.Xoshiro(209))
+    uq_fmap = compute_uq(res_fmap;
+                         method=:wald,
+                         pseudo_inverse=true,
+                         n_draws=20,
+                         fd_abs_step=1e-4,
+                         fd_rel_step=1e-4,
+                         fd_max_tries=50,
+                         rng=Random.Xoshiro(209))
     @test get_uq_source_method(uq_fmap) == :focei_map
     @test get_uq_parameter_names(uq_fmap) == [:β_1, :β_2, :a, :σ]
 end

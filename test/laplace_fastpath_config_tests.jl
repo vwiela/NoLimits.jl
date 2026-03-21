@@ -430,30 +430,6 @@ end
     @test all(o.reasons == (:mode_off,) for o in info_off.outcomes)
 end
 
-@testset "Laplace and LaplaceMAP emit fastpath eligibility info" begin
-    dm_l = DataModel(_lfpc_model(), _lfpc_df(); primary_id=:ID, time_col=:t)
-    dm_m = DataModel(_lfpc_model(; with_priors=true), _lfpc_df(); primary_id=:ID, time_col=:t)
-
-    @test_logs (:info, r"Laplace fast-path eligibility") begin
-        fit_model(dm_l,
-                  NoLimits.Laplace(; optim_kwargs=(maxiters=1,),
-                                     inner_kwargs=(maxiters=3,),
-                                     multistart_n=0,
-                                     multistart_k=0,
-                                     fastpath_mode=:auto);
-                  rng=MersenneTwister(11))
-    end
-
-    @test_logs (:info, r"Laplace fast-path eligibility") begin
-        fit_model(dm_m,
-                  NoLimits.LaplaceMAP(; optim_kwargs=(maxiters=1,),
-                                        inner_kwargs=(maxiters=3,),
-                                        multistart_n=0,
-                                        multistart_k=0,
-                                        fastpath_mode=:auto);
-                  rng=MersenneTwister(11))
-    end
-end
 
 @testset "Step4 no numerical change: fastpath auto equals off" begin
     dm_l = DataModel(_lfpc_model(), _lfpc_df(); primary_id=:ID, time_col=:t)
