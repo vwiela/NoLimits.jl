@@ -120,6 +120,9 @@ method = NoLimits.SAEM(;
     ebe_rescue_multistart_sampling=:lhs,
     lb=nothing,
     ub=nothing,
+    anneal_to_fixed=(),
+    anneal_schedule=:exponential,
+    anneal_min_sd=1e-5,
 )
 ```
 
@@ -136,6 +139,7 @@ The constructor arguments are organized into the following functional groups.
 | Built-in statistics hooks | `builtin_stats`, `builtin_mean`, `resid_var_param`, `re_cov_params`, `re_mean_params` | Automatic closed-form parameter updates for supported distribution structures. |
 | Final EB modes | `ebe_*`, `ebe_rescue_*` | Post-fit empirical Bayes mode optimization used by random-effects accessors. |
 | Bounds | `lb`, `ub` | Optional transformed-scale bounds on free fixed effects. |
+| RE annealing | `anneal_to_fixed`, `anneal_schedule`, `anneal_min_sd` | Progressive shrinkage of selected RE prior SDs toward zero, collapsing those effects to fixed by the final iteration. |
 
 ## Constructor Input Reference
 
@@ -242,6 +246,138 @@ After convergence, SAEM computes empirical Bayes modal estimates of the random e
 - `lb`, `ub`
   - Optional transformed-scale bounds for free fixed effects.
   - When a closed-form M-step is used, SAEM projects closed-form updates into these bounds on the transformed scale.
+
+### RE Annealing Inputs
+
+- `anneal_to_fixed`
+  - A `Tuple` of RE name `Symbol`s to progressively collapse toward fixed effects.
+  - Each named RE must satisfy two eligibility conditions:
+    1. Its distribution must be `Normal(μ, σ)`.
+    2. The SD `σ` must be a plain numeric literal in the `@randomEffects` block (e.g. `Normal(a, 2.0)`). Using a fixed-effect parameter or covariate as SD (e.g. `Normal(0.0, τ)`) raises an informative error at startup.
+  - Default: `()` (no annealing).
+- `anneal_schedule`
+  - Controls the shape of the SD decay curve. Supported values:
+    - `:exponential` (default) — exponential decay from the initial SD to `anneal_min_sd`.
+    - `:linear` — linear interpolation from the initial SD to `anneal_min_sd`.
+    - `:gamma` — decay tied to the SA gain sequence, using the same `t0` and `kappa` as the main schedule.
+- `anneal_min_sd`
+  - Target SD reached at the final iteration.
+  - Default: `1e-5`.
+
+## RE Annealing
+
+The `anneal_to_fixed` option progressively shrinks the prior standard deviation of selected Normal random effects from their initial value toward `anneal_min_sd` over the course of SAEM iterations. By the final iteration the prior SD is negligibly small, which effectively collapses the annealed RE into a fixed shift — the sampler can no longer move it away from its mean, so it behaves as a fixed effect without requiring a model change.
+
+Both the E-step sampler and the M-step Q function see the shrunken SD at each iteration, so the annealing is consistent across the entire algorithm.
+
+### When to Use
+
+Annealing is useful when:
+
+- A random effect is suspected to be negligible and you want to assess the impact of removing it without refitting from scratch.
+- You want to run an early exploration phase with tight RE priors, then let the priors relax (by using a second fit without annealing).
+- A model has identifiability issues in early iterations and annealing an RE stabilizes the trajectory before the final convergence phase.
+
+### Eligibility
+
+A random effect is eligible for annealing if and only if:
+
+1. Its declared distribution is `Normal(μ, σ)`.
+2. The SD argument `σ` is a plain numeric literal — not a fixed-effect parameter, covariate, or helper expression.
+
+Valid examples:
+```julia
+eta = RandomEffect(Normal(0.0, 2.0); column=:ID)   # literal SD 2.0 ✓
+eta = RandomEffect(Normal(a, 0.5);   column=:ID)   # literal SD 0.5, mean is fixed effect ✓
+```
+
+Invalid examples (raise a clear error at startup):
+```julia
+eta = RandomEffect(Normal(0.0, tau); column=:ID)   # SD is fixed-effect param tau ✗
+eta = RandomEffect(Normal(mu, tau);  column=:ID)   # both mu and tau are params ✗
+eta = RandomEffect(MvNormal(...);    column=:ID)   # not Normal ✗
+```
+
+### Schedule Options
+
+The three built-in schedules all start from the initial literal SD (`sd0`) and finish at `anneal_min_sd` by the last iteration.
+
+| Schedule | Shape | Notes |
+| --- | --- | --- |
+| `:exponential` | exponential decay | default; reaches `anneal_min_sd` smoothly and quickly |
+| `:linear` | straight-line decay | simple; slower initial shrinkage than exponential |
+| `:gamma` | SA-gain-coupled decay | ties annealing speed to the main SA schedule (`t0`, `kappa`) |
+
+### Interaction with Built-in Statistics
+
+When `builtin_stats=:closed_form` (or `:auto`) and an annealed RE also appears in `re_cov_params`, annealing always takes precedence: the built-in closed-form covariance update for that RE is suppressed for the entire run. A one-time info message is printed at startup to make this visible.
+
+### Example
+
+```julia
+using NoLimits
+using DataFrames
+using Distributions
+using Turing
+
+model = @Model begin
+    @fixedEffects begin
+        a    = RealNumber(0.5)
+        b    = RealNumber(0.2)
+        sigma = RealNumber(0.3, scale=:log)
+    end
+
+    @covariates begin
+        t = Covariate()
+    end
+
+    @randomEffects begin
+        # SD is a plain literal — eligible for annealing
+        eta_id   = RandomEffect(Normal(0.0, 1.2); column=:ID)
+        # This RE will be annealed: its SD decays from 0.8 to 1e-5
+        eta_site = RandomEffect(Normal(0.0, 0.8); column=:SITE)
+    end
+
+    @formulas begin
+        mu = a + b * t + eta_id + eta_site
+        y ~ Normal(mu, sigma)
+    end
+end
+
+# Collapse eta_site toward a fixed effect over the run
+method = NoLimits.SAEM(;
+    sampler=MH(),
+    turing_kwargs=(n_samples=20, n_adapt=0, progress=false),
+    maxiters=100,
+    anneal_to_fixed=(:eta_site,),
+    anneal_schedule=:exponential,   # default
+    anneal_min_sd=1e-5,             # default
+)
+
+res = fit_model(dm, method)
+```
+
+To compare schedules, pass the same `anneal_to_fixed` with a different `anneal_schedule`:
+
+```julia
+method_linear = NoLimits.SAEM(;
+    sampler=MH(),
+    turing_kwargs=(n_samples=20, n_adapt=0, progress=false),
+    maxiters=100,
+    anneal_to_fixed=(:eta_site,),
+    anneal_schedule=:linear,
+)
+
+method_gamma = NoLimits.SAEM(;
+    sampler=MH(),
+    turing_kwargs=(n_samples=20, n_adapt=0, progress=false),
+    maxiters=100,
+    anneal_to_fixed=(:eta_site,),
+    anneal_schedule=:gamma,
+    t0=20,
+    kappa=0.65,
+)
+```
 
 ## Which Models Have Closed-Form M-step Updates?
 
