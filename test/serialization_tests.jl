@@ -59,7 +59,7 @@ _df_with_re() = DataFrame(ID=[1,1,2,2,3,3], t=[0.0,1.0,0.0,1.0,0.0,1.0], y=[1.0,
     res2 = load_fit(path; dm=dm)
 
     @test get_objective(res) ≈ get_objective(res2)
-    @test get_params(res).untransformed ≈ get_params(res2).untransformed
+    @test NoLimits.get_params(res).untransformed ≈ NoLimits.get_params(res2).untransformed
     @test get_iterations(res) == get_iterations(res2)
     @test get_converged(res) == get_converged(res2)
     @test get_raw(res2) === nothing
@@ -79,7 +79,7 @@ end
     res2 = load_fit(path; model=model)   # no dm — reconstructed from saved df
 
     @test get_objective(res) ≈ get_objective(res2)
-    @test get_params(res).untransformed ≈ get_params(res2).untransformed
+    @test NoLimits.get_params(res).untransformed ≈ NoLimits.get_params(res2).untransformed
     @test get_data_model(res2) !== nothing
 end
 
@@ -96,7 +96,7 @@ end
     res2 = load_fit(path)             # no model, no dm
 
     @test get_objective(res) ≈ get_objective(res2)
-    @test get_params(res).untransformed ≈ get_params(res2).untransformed
+    @test NoLimits.get_params(res).untransformed ≈ NoLimits.get_params(res2).untransformed
     @test get_data_model(res2) === nothing
 end
 
@@ -113,7 +113,7 @@ end
     res2 = load_fit(path; dm=dm)
 
     @test get_objective(res) ≈ get_objective(res2)
-    @test get_params(res).untransformed ≈ get_params(res2).untransformed
+    @test NoLimits.get_params(res).untransformed ≈ NoLimits.get_params(res2).untransformed
 end
 
 # ── Laplace ───────────────────────────────────────────────────────────────────
@@ -129,7 +129,7 @@ end
     res2 = load_fit(path; model=model)
 
     @test get_objective(res) ≈ get_objective(res2)
-    @test get_params(res).untransformed ≈ get_params(res2).untransformed
+    @test NoLimits.get_params(res).untransformed ≈ NoLimits.get_params(res2).untransformed
     @test get_iterations(res) == get_iterations(res2)
 
     re1 = get_random_effects(dm, res)
@@ -205,7 +205,7 @@ end
     @test length(get_multistart_results(res)) == length(get_multistart_results(res2))
     @test get_multistart_best_index(res) == get_multistart_best_index(res2)
     @test get_objective(res) ≈ get_objective(res2)
-    @test get_params(res).untransformed ≈ get_params(res2).untransformed
+    @test NoLimits.get_params(res).untransformed ≈ NoLimits.get_params(res2).untransformed
     @test eltype(get_multistart_errors(res2)) == String
 end
 
