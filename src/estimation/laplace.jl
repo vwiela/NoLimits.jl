@@ -2227,7 +2227,7 @@ Laplace(; optimizer=OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracki
         lb=nothing,
         ub=nothing,
         ignore_model_bounds=false,
-        nan_recovery=:nan) = begin
+        nan_recovery=:backtrack) = begin
     inner = inner_options === nothing ? LaplaceInnerOptions(inner_optimizer, inner_kwargs, inner_adtype, inner_grad_tol) : inner_options
     hess = hessian_options === nothing ? LaplaceHessianOptions(jitter, max_tries, jitter_growth, adaptive_jitter, jitter_scale, use_trace_logdet_grad, use_hutchinson, hutchinson_n) : hessian_options
     cache = cache_options === nothing ? LaplaceCacheOptions(theta_tol) : cache_options
@@ -2315,7 +2315,7 @@ LaplaceMAP(; optimizer=OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTra
            lb=nothing,
            ub=nothing,
            ignore_model_bounds=false,
-           nan_recovery=:nan) = begin
+           nan_recovery=:backtrack) = begin
     inner = inner_options === nothing ? LaplaceInnerOptions(inner_optimizer, inner_kwargs, inner_adtype, inner_grad_tol) : inner_options
     hess = hessian_options === nothing ? LaplaceHessianOptions(jitter, max_tries, jitter_growth, adaptive_jitter, jitter_scale, use_trace_logdet_grad, use_hutchinson, hutchinson_n) : hessian_options
     cache = cache_options === nothing ? LaplaceCacheOptions(theta_tol) : cache_options
@@ -2664,7 +2664,7 @@ function _fit_model(dm::DataModel, method::Laplace, args...;
                                       fastpath=fastpath_info,
                                       rng=rng,
                                       serialization=serialization)
-        obj == Inf && return infT
+        !isfinite(obj) && return infT
         obj += _penalty_value(θu, penalty)
         _laplace_obj_cache_set_obj!(obj_cache, θt_free, obj)
         return obj
@@ -2709,8 +2709,11 @@ function _fit_model(dm::DataModel, method::Laplace, args...;
                     fm = obj_only(θm, nothing)
                     grad_free[i] = (isfinite(fp) && isfinite(fm)) ? (fp - fm) / (2ε) : zero(T)
                 end
+            elseif method.nan_recovery !== :nan
+                # :backtrack (default) — treat NaN gradient as non-finite objective to force backtracking
+                return (infT, ComponentArray(zeros(T, length(θt_free)), axs_free))
             end
-            # :nan — NaN propagates to the optimizer as-is
+            # :nan — NaN propagates to the optimizer as-is (for debugging)
         end
         obj += _penalty_value(θu, penalty)
         _laplace_obj_cache_set_obj_grad!(obj_cache, θt_free, obj, grad_free)
@@ -2938,8 +2941,11 @@ function _fit_model(dm::DataModel, method::LaplaceMAP, args...;
                     fm = obj_only(θm, nothing)
                     grad_free[i] = (isfinite(fp) && isfinite(fm)) ? (fp - fm) / (2ε) : zero(T)
                 end
+            elseif method.nan_recovery !== :nan
+                # :backtrack (default) — treat NaN gradient as non-finite objective to force backtracking
+                return (infT, ComponentArray(zeros(T, length(θt_free)), axs_free))
             end
-            # :nan — NaN propagates to the optimizer as-is
+            # :nan — NaN propagates to the optimizer as-is (for debugging)
         end
         _laplace_obj_cache_set_obj_grad!(obj_cache, θt_free, obj, grad_free)
         return (obj, grad_free)
