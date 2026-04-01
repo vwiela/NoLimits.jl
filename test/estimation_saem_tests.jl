@@ -161,7 +161,7 @@ end
     @test notes_custom.closed_form_mstep_mode == :closed_form_only
     @test :custom_mstep_closed_form in notes_custom.closed_form_mstep_sources
 
-    @test_logs match_mode=:any (:info, r"SAEM closed-form M-step plan") begin
+    @test_logs match_mode=:any (:info, r"SAEM: numerically optimized parameters") begin
         fit_model(dm, NoLimits.SAEM(;
             sampler=MH(),
             turing_kwargs=(n_samples=5, n_adapt=0, progress=false),

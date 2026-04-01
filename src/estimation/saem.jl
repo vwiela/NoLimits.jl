@@ -14,7 +14,7 @@ using LinearAlgebra
 using ProgressMeter
 import ForwardDiff
 
-struct SAEMOptions{S, K, U, W, V, P, F1, F2, F3, B, M, R, C, RM, EO, EK, EA, EG, ER, AF}
+struct SAEMOptions{S, K, U, W, V, P, F1, F2, F3, B, M, R, C, RM, EO, EK, EA, EG, ER, AF, SF, AT, ANF}
     sampler::S
     turing_kwargs::K
     update_schedule::U
@@ -51,6 +51,22 @@ struct SAEMOptions{S, K, U, W, V, P, F1, F2, F3, B, M, R, C, RM, EO, EK, EA, EG,
     anneal_to_fixed::AF
     anneal_schedule::Symbol
     anneal_min_sd::Float64
+    mstep_sa_on_params::Bool
+    sa_schedule::Symbol
+    sa_burnin_iters::Int
+    sa_phase1_iters::Int
+    sa_phase2_kappa::Float64
+    sa_schedule_fn::SF
+    n_chains::Int
+    auto_small_n_chains::Bool
+    small_n_chain_target::Int
+    sa_anneal_targets::AT
+    sa_anneal_schedule::Symbol
+    sa_anneal_iters::Int
+    sa_anneal_alpha::Float64
+    sa_anneal_fn::ANF
+    auto_var_lb::Bool
+    var_lb_value::Float64
 end
 
 struct _SAEMQCache{T}
@@ -80,6 +96,7 @@ function _init_saem_sample_store(capacity::Int, batch_infos::Vector{_LaplaceBatc
 end
 
 function _saem_store_push!(store::_SAEMSampleStore, b_current, γ::Float64)
+    γ == 0.0 && return store
     # Scale all existing weights in-place (no allocation)
     one_minus_γ = 1.0 - γ
     @inbounds for i in 1:store.len
@@ -242,6 +259,13 @@ or closed-form updates (when `builtin_stats` is enabled).
   `ebe_multistart_sampling`: multistart settings for EBE mode computation.
 - `ebe_rescue_*`: rescue multistart settings when an EBE mode has a high gradient norm.
 - `lb`, `ub`: bounds on the transformed fixed-effect scale, or `nothing`.
+- `mstep_sa_on_params::Bool = false`: if `true`, the numerical M-step uses only the
+  current iteration's random-effect samples (not the ring buffer) as the objective,
+  and applies a Robbins-Monro parameter update
+  `θ_new = θ_old + γ*(θ̂ − θ_old)` rather than setting `θ_new = θ̂` directly.
+  Useful with `SaemixMH` (whose kernel-1 draws from the prior, so the current-sample
+  Q is well-identified). For Turing-based samplers (`MH`, `NUTS`) the ring-buffer
+  default is preferred.
 """
 struct SAEM{O, K, A, SO, L, U} <: FittingMethod
     optimizer::O
@@ -263,7 +287,7 @@ SAEM(; optimizer=OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracking(
     progress=true,
     mcmc_steps=80,
      max_store=50,
-     t0=20,
+     t0=150,
      kappa=0.65,
     maxiters=300,
     rtol_theta=5e-5,
@@ -297,7 +321,23 @@ SAEM(; optimizer=OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracking(
      ub=nothing,
      anneal_to_fixed=(),
      anneal_schedule=:exponential,
-     anneal_min_sd=1e-5) = begin
+     anneal_min_sd=1e-5,
+     mstep_sa_on_params::Bool=false,
+     sa_schedule::Symbol=:robbins_monro,
+     sa_burnin_iters::Int=0,
+     sa_phase1_iters::Int=200,
+     sa_phase2_kappa::Float64=-1.0,
+     sa_schedule_fn=nothing,
+     n_chains::Int=1,
+     auto_small_n_chains::Bool=false,
+     small_n_chain_target::Int=50,
+     sa_anneal_targets::NamedTuple=NamedTuple(),
+     sa_anneal_schedule::Symbol=:exponential,
+     sa_anneal_iters::Int=0,
+     sa_anneal_alpha::Float64=0.9,
+     sa_anneal_fn=nothing,
+     auto_var_lb::Bool=true,
+     var_lb_value::Float64=1e-5) = begin
     ebe_rescue = EBERescueOptions(ebe_rescue_on_high_grad, ebe_rescue_multistart_n, ebe_rescue_multistart_k, ebe_rescue_max_rounds, ebe_rescue_grad_tol, ebe_rescue_multistart_sampling)
     saem = SAEMOptions(sampler, turing_kwargs, update_schedule, warm_start, verbose, progress,
                        mcmc_steps, max_store, t0, kappa,
@@ -308,7 +348,11 @@ SAEM(; optimizer=OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracking(
                        ebe_multistart_n, ebe_multistart_k, ebe_multistart_max_rounds,
                        ebe_multistart_sampling,
                        ebe_rescue,
-                       anneal_to_fixed, anneal_schedule, anneal_min_sd)
+                       anneal_to_fixed, anneal_schedule, anneal_min_sd, mstep_sa_on_params,
+                       sa_schedule, sa_burnin_iters, sa_phase1_iters, sa_phase2_kappa, sa_schedule_fn,
+                       n_chains, auto_small_n_chains, small_n_chain_target,
+                       sa_anneal_targets, sa_anneal_schedule, sa_anneal_iters, sa_anneal_alpha, sa_anneal_fn,
+                       auto_var_lb, var_lb_value)
     SAEM(optimizer, optim_kwargs, adtype, saem, lb, ub)
 end
 
@@ -345,6 +389,9 @@ mutable struct _SAEMDiagnostics{T}
     dQ_rel::Vector{T}
     gamma::Vector{T}
     batches::Vector{Vector{Int}}
+    schedule_phase::Vector{Symbol}
+    n_chains_used::Vector{Int}
+    anneal_active::Vector{Bool}
 end
 
 @inline function _saem_normalize_builtin_stats_mode(mode)
@@ -357,7 +404,201 @@ end
     return (t - t0)^(-kappa)
 end
 
+function _saem_gamma_schedule(iter::Int, opts::SAEMOptions)
+    opts.sa_schedule === :custom && return opts.sa_schedule_fn(iter, opts)
+    if opts.sa_schedule === :robbins_monro
+        iter <= opts.sa_burnin_iters && return 0.0
+        iter <= opts.sa_burnin_iters + opts.t0 && return 1.0
+        phase3_total = opts.maxiters - opts.sa_burnin_iters - opts.t0
+        phase3_total <= 0 && return 0.0
+        k3 = iter - opts.sa_burnin_iters - opts.t0
+        k3 >= phase3_total && return 0.0
+        return ((phase3_total - k3) / phase3_total)^opts.kappa
+    else  # :two_phase
+        iter <= opts.sa_burnin_iters && return 0.0
+        iter <= opts.sa_burnin_iters + opts.sa_phase1_iters && return 1.0
+        k2 = iter - opts.sa_burnin_iters - opts.sa_phase1_iters
+        return clamp(Float64(k2)^opts.sa_phase2_kappa, 0.0, 1.0)
+    end
+end
+
+function _saem_schedule_phase(iter::Int, opts::SAEMOptions)
+    opts.sa_schedule === :custom && return :custom
+    if opts.sa_schedule === :robbins_monro
+        iter <= opts.sa_burnin_iters && return :burnin
+        iter <= opts.sa_burnin_iters + opts.t0 && return :robbins_monro
+        return :robbins_monro_decay
+    else  # :two_phase
+        iter <= opts.sa_burnin_iters && return :burnin
+        iter <= opts.sa_burnin_iters + opts.sa_phase1_iters && return :phase1
+        return :phase2
+    end
+end
+
+function _saem_past_stabilization_phase(iter::Int, opts::SAEMOptions)
+    opts.sa_schedule === :custom && return iter > 1
+    if opts.sa_schedule === :robbins_monro
+        return iter > opts.sa_burnin_iters + opts.t0
+    else  # :two_phase
+        return iter > opts.sa_burnin_iters + opts.sa_phase1_iters
+    end
+end
+
+function _saem_effective_chains(n_chains::Int, auto::Bool, target::Int, n_batches::Int)
+    if auto && n_batches < target
+        n_batches_eff = max(1, n_batches)
+        auto_n = cld(target, n_batches_eff)
+        return max(n_chains, auto_n)
+    end
+    return n_chains
+end
+
+function _saem_update_b_current!(b_current::Vector, b_chains::Vector,
+                                  batch_indices::AbstractVector{Int}, n_chains::Int)
+    if n_chains == 1
+        @inbounds for bi in batch_indices
+            b_current[bi] = b_chains[bi][1]
+        end
+    else
+        inv_nc = 1.0 / n_chains
+        @inbounds for bi in batch_indices
+            chains = b_chains[bi]
+            b = b_current[bi]
+            fill!(b, 0.0)
+            for c in 1:n_chains
+                b .+= chains[c]
+            end
+            b .*= inv_nc
+        end
+    end
+    return b_current
+end
+
+function _saem_sa_anneal_floor_scalar(init_val::Float64, alpha::Float64,
+                                      frac::Float64, schedule::Symbol)
+    base = alpha * abs(init_val)
+    schedule === :exponential && return base * exp(-3.0 * frac)
+    return base * (1.0 - frac)   # :linear
+end
+
+function _saem_build_sa_anneal_targets(user_targets::NamedTuple, re_cov_params::NamedTuple,
+                                       re_family_map::NamedTuple, alpha::Float64)
+    !isempty(keys(user_targets)) && return user_targets
+    seen  = Set{Symbol}()
+    pairs = Pair{Symbol, Float64}[]
+    for re_name in keys(re_cov_params)
+        haskey(re_family_map, re_name) || continue
+        family = getproperty(re_family_map, re_name)
+        (family === :normal || family === :lognormal) || continue
+        cov_sym = getproperty(re_cov_params, re_name)
+        cov_sym isa Symbol || continue
+        cov_sym in seen && continue
+        push!(seen, cov_sym)
+        push!(pairs, cov_sym => alpha)
+    end
+    return NamedTuple(pairs)
+end
+
+function _saem_apply_sa_anneal_clamp(θu::ComponentArray, active::NamedTuple,
+                                     initial::NamedTuple, iter::Int, anneal_iters::Int,
+                                     alpha::Float64, schedule::Symbol)
+    isempty(keys(active)) && return θu
+    iter > anneal_iters && return θu
+    frac = anneal_iters <= 1 ? 0.0 : Float64(iter - 1) / Float64(anneal_iters - 1)
+    # First pass: check if any clamping needed
+    needs_clamp = false
+    for sym in keys(active)
+        hasproperty(θu, sym) || continue
+        init_v = getproperty(initial, sym)
+        curr_v = getproperty(θu, sym)
+        if curr_v isa Number
+            floor_v = _saem_sa_anneal_floor_scalar(Float64(init_v), Float64(getproperty(active, sym)), frac, schedule)
+            Float64(curr_v) < floor_v && (needs_clamp = true; break)
+        else
+            α = Float64(getproperty(active, sym))
+            for i in eachindex(curr_v)
+                floor_v = _saem_sa_anneal_floor_scalar(Float64(init_v[i]), α, frac, schedule)
+                Float64(curr_v[i]) < floor_v && (needs_clamp = true; break)
+            end
+            needs_clamp && break
+        end
+    end
+    needs_clamp || return θu
+    # Second pass: apply clamp
+    new_θu = copy(θu)
+    for sym in keys(active)
+        hasproperty(new_θu, sym) || continue
+        init_v = getproperty(initial, sym)
+        curr_v = getproperty(new_θu, sym)
+        α     = Float64(getproperty(active, sym))
+        if curr_v isa Number
+            floor_v = _saem_sa_anneal_floor_scalar(Float64(init_v), α, frac, schedule)
+            Float64(curr_v) < floor_v && setproperty!(new_θu, sym, floor_v)
+        else
+            for i in eachindex(curr_v)
+                floor_v = _saem_sa_anneal_floor_scalar(Float64(init_v[i]), α, frac, schedule)
+                Float64(curr_v[i]) < floor_v && (curr_v[i] = floor_v)
+            end
+        end
+    end
+    return new_θu
+end
+
+function _saem_build_var_lb_target_set(re_cov_params::NamedTuple, re_family_map::NamedTuple,
+                                       resid_var_param, θ0_u::ComponentArray)
+    targets = Symbol[]
+    for re_name in keys(re_cov_params)
+        haskey(re_family_map, re_name) || continue
+        family = getproperty(re_family_map, re_name)
+        family in (:normal, :lognormal, :mvnormal) || continue
+        cov_sym = getproperty(re_cov_params, re_name)
+        cov_sym isa Symbol || continue
+        hasproperty(θ0_u, cov_sym) || continue
+        val = getproperty(θ0_u, cov_sym)
+        val isa AbstractMatrix && continue
+        cov_sym in targets || push!(targets, cov_sym)
+    end
+    if resid_var_param isa Symbol
+        hasproperty(θ0_u, resid_var_param) && (resid_var_param in targets || push!(targets, resid_var_param))
+    elseif resid_var_param isa NamedTuple
+        for sym in values(resid_var_param)
+            sym isa Symbol || continue
+            hasproperty(θ0_u, sym) && (sym in targets || push!(targets, sym))
+        end
+    end
+    return Tuple(targets)
+end
+
+function _saem_apply_var_lb(θu::ComponentArray, targets, lb_value::Float64)
+    isempty(targets) && return θu
+    needs_clamp = false
+    for sym in targets
+        hasproperty(θu, sym) || continue
+        val = getproperty(θu, sym)
+        if val isa Number
+            Float64(val) < lb_value && (needs_clamp = true; break)
+        else
+            any(v -> Float64(v) < lb_value, val) && (needs_clamp = true; break)
+        end
+    end
+    needs_clamp || return θu
+    new_θu = copy(θu)
+    for sym in targets
+        hasproperty(new_θu, sym) || continue
+        val = getproperty(new_θu, sym)
+        if val isa Number
+            Float64(val) < lb_value && setproperty!(new_θu, sym, lb_value)
+        else
+            for i in eachindex(val)
+                Float64(val[i]) < lb_value && (val[i] = lb_value)
+            end
+        end
+    end
+    return new_θu
+end
+
 function _saem_stats_update(s, s_new, γ)
+    γ == 0.0 && return s
     s === nothing && return s_new
     if s isa NamedTuple && s_new isa NamedTuple
         keys(s) == keys(s_new) || error("sufficient statistics keys mismatch.")
@@ -1871,6 +2112,53 @@ function _saem_Q(dm::DataModel,
     end
 end
 
+# Observation log-likelihood E[log p(y|η,θ)] averaged over the ring buffer.
+# Used for progress display only — cheaper than recomputing Q (no RE prior term).
+function _saem_obsLL(dm::DataModel,
+                     batch_infos::Vector{_LaplaceBatchInfo},
+                     θ::ComponentArray,
+                     const_cache::LaplaceConstantsCache,
+                     ll_cache,
+                     b_current::AbstractVector)
+    total = 0.0
+    cache_local = ll_cache isa Vector ? ll_cache[1] : ll_cache
+    θ_re = _symmetrize_psd_params(θ, dm.model.fixed.fixed)
+    for (bi, info) in enumerate(batch_infos)
+        b = b_current[bi]
+        isempty(b) && continue
+        for i in info.inds
+            η_ind = _build_eta_ind(dm, i, info, b, const_cache, θ_re)
+            lli = _loglikelihood_individual(dm, i, θ_re, η_ind, cache_local)
+            isfinite(lli) || continue
+            total += lli
+        end
+    end
+    return total
+end
+
+# Evaluate Q from only the current iteration's samples (b_current).
+# Used when mstep_sa_on_params=true: O(N) vs O(max_store × N) for _saem_Q.
+function _saem_Q_current(dm::DataModel,
+                          batch_infos::Vector{_LaplaceBatchInfo},
+                          θ::ComponentArray,
+                          const_cache::LaplaceConstantsCache,
+                          ll_cache,
+                          b_current::AbstractVector;
+                          serialization::SciMLBase.EnsembleAlgorithm=EnsembleSerial(),
+                          anneal_sds::NamedTuple=NamedTuple())
+    total = zero(eltype(θ))
+    ll_cache_local = ll_cache isa Vector ? ll_cache[1] : ll_cache
+    for (bi, info) in enumerate(batch_infos)
+        snap = b_current[bi]
+        isempty(snap) && continue
+        logf = _laplace_logf_batch(dm, info, θ, snap, const_cache, ll_cache_local;
+                                   anneal_sds=anneal_sds)
+        !isfinite(logf) && return typeof(total)(Inf)
+        total += logf
+    end
+    return total
+end
+
 function _saem_collect_target_symbols!(out::Vector{Symbol}, target)
     if target isa Symbol
         push!(out, target)
@@ -1893,30 +2181,26 @@ function _saem_log_closed_form_plan(requested_mode::Symbol,
                                     re_mean_params::NamedTuple,
                                     resid_var_param,
                                     hmm_emission_params::NamedTuple,
-                                    has_custom_closed_form::Bool)
-    requested_norm = _saem_normalize_builtin_stats_mode(requested_mode)
-    requested_norm == :none && !has_custom_closed_form && return nothing
-
-    re_cov_targets = Symbol[]
-    re_mean_targets = Symbol[]
-    resid_targets = Symbol[]
-    hmm_emission_targets = Symbol[]
-
-    for v in values(re_cov_params)
-        _saem_collect_target_symbols!(re_cov_targets, v)
-    end
-    for v in values(re_mean_params)
-        _saem_collect_target_symbols!(re_mean_targets, v)
-    end
-    _saem_collect_target_symbols!(resid_targets, resid_var_param)
+                                    has_custom_closed_form::Bool,
+                                    base_free_names::Vector{Symbol})
+    cf_syms = Symbol[]
+    for v in values(re_cov_params);     _saem_collect_target_symbols!(cf_syms, v); end
+    for v in values(re_mean_params);    _saem_collect_target_symbols!(cf_syms, v); end
+    _saem_collect_target_symbols!(cf_syms, resid_var_param)
     for col in keys(hmm_emission_params)
         info = getfield(hmm_emission_params, col)
-        if hasproperty(info, :target)
-            _saem_collect_target_symbols!(hmm_emission_targets, getproperty(info, :target))
-        end
+        hasproperty(info, :target) && _saem_collect_target_symbols!(cf_syms, getproperty(info, :target))
     end
-
-    @info "SAEM closed-form M-step plan" requested_mode=requested_mode effective_mode=effective_mode has_custom_closed_form=has_custom_closed_form has_any_closed_form_block=elig.has_any_closed_form_block re_block_eligible=elig.re_block_eligible outcome_block_eligible=elig.outcome_block_eligible hmm_emission_block_eligible=elig.hmm_emission_block_eligible re_targets=elig.re_targets outcome_targets_non_hmm=elig.outcome_targets_non_hmm outcome_targets_hmm=elig.outcome_targets_hmm hmm_outcomes=elig.hmm_outcomes hmm_transition_closed_form=elig.hmm_transition_closed_form hmm_emission_closed_form=elig.hmm_emission_closed_form hmm_emission_targets=elig.hmm_emission_targets hmm_emission_targets_unsupported=elig.hmm_emission_targets_unsupported mapped_re_cov_params=Tuple(keys(re_cov_params)) mapped_re_mean_params=Tuple(keys(re_mean_params)) mapped_re_cov_targets=Tuple(unique(re_cov_targets)) mapped_re_mean_targets=Tuple(unique(re_mean_targets)) mapped_residual_targets=Tuple(unique(resid_targets)) mapped_hmm_emission_outcomes=Tuple(keys(hmm_emission_params)) mapped_hmm_emission_param_targets=Tuple(unique(hmm_emission_targets)) reasons=elig.reasons
+    cf_set = Set(cf_syms)
+    if has_custom_closed_form
+        union!(cf_set, base_free_names)   # custom closed-form handles everything
+    end
+    numeric_params = [n for n in base_free_names if !(n in cf_set)]
+    if isempty(numeric_params)
+        @info "SAEM: all parameters handled by closed-form M-step; numeric optimizer inactive."
+    else
+        @info "SAEM: numerically optimized parameters: $(numeric_params)"
+    end
     return nothing
 end
 
@@ -2118,7 +2402,7 @@ function _fit_model(dm::DataModel, method::SAEM, args...;
     has_custom_closed_form = method.saem.suffstats !== nothing && method.saem.mstep_closed_form !== nothing
     _saem_log_closed_form_plan(method.saem.builtin_stats, builtin_stats_mode, builtin_cf_elig,
                                re_cov_params, re_mean_params, resid_var_param, hmm_emission_params,
-                               has_custom_closed_form)
+                               has_custom_closed_form, base_free_names)
     re_family_map = _saem_re_family_map(dm)
 
     # anneal_to_fixed validation
@@ -2148,14 +2432,61 @@ function _fit_model(dm::DataModel, method::SAEM, args...;
                                Vector{T0}(),
                                Vector{T0}(),
                                Vector{T0}(),
-                               Vector{Vector{Int}}())
+                               Vector{Vector{Int}}(),
+                               Vector{Symbol}(),
+                               Vector{Int}(),
+                               Vector{Bool}())
 
     q_cache = _init_saem_q_cache(T0, length(batch_infos), serialization)
 
-    last_params = Vector{Union{Nothing, NamedTuple, AbstractVector}}(undef, length(batch_infos))
-    fill!(last_params, nothing)
+    effective_n_chains = _saem_effective_chains(method.saem.n_chains,
+                                                method.saem.auto_small_n_chains,
+                                                method.saem.small_n_chain_target,
+                                                length(batch_infos))
+    last_chain_params = begin
+        _lcp_init = Vector{Union{Nothing, NamedTuple, AbstractVector, _AdaptiveMHState, _SaemixMHState}}(undef, effective_n_chains)
+        fill!(_lcp_init, nothing)
+        [copy(_lcp_init) for _ in 1:length(batch_infos)]
+    end
     batch_rngs = _saem_thread_rngs(rng, length(batch_infos))
-    b_current = [zeros(T0, info.n_b) for info in batch_infos]
+    b_current  = [zeros(T0, info.n_b) for info in batch_infos]
+    b_chains   = [[zeros(T0, info.n_b) for _ in 1:effective_n_chains] for info in batch_infos]
+
+    # Precompute SA annealing targets (auto or user-provided).
+    # Run a separate auto-detection pass independent of builtin_stats so that
+    # sa_anneal targets are available even when builtin_stats=:none.
+    re_family_map_sa = _saem_re_family_map(dm)
+    _sa_re_cov_params = re_cov_params
+    if isempty(keys(_sa_re_cov_params)) && isempty(keys(method.saem.sa_anneal_targets))
+        _sa_auto_cfg = _saem_autodetect_gaussian_re(dm, fixed_names)
+        if _sa_auto_cfg !== nothing
+            _sa_re_cov_params = _sa_auto_cfg.re_cov_params
+        end
+    end
+    sa_anneal_targets_eff = _saem_build_sa_anneal_targets(
+        method.saem.sa_anneal_targets, _sa_re_cov_params, re_family_map_sa,
+        method.saem.sa_anneal_alpha)
+    sa_anneal_iters_eff = method.saem.sa_anneal_iters > 0 ?
+        method.saem.sa_anneal_iters : max(0, round(Int, 0.3 * method.saem.maxiters))
+    sa_anneal_initial_vals = if !isempty(keys(sa_anneal_targets_eff))
+        NamedTuple{Tuple(keys(sa_anneal_targets_eff))}(
+            Tuple(getproperty(θ0_u, sym) for sym in keys(sa_anneal_targets_eff)))
+    else
+        NamedTuple()
+    end
+    do_sa_anneal = !isempty(keys(sa_anneal_targets_eff))
+
+    # Precompute var lb targets.
+    # Use _sa_re_cov_params (which has independent auto-detection) and
+    # the effective resid_var_param (already auto-detected if builtin_stats=:auto).
+    var_lb_targets = if method.saem.auto_var_lb
+        _saem_build_var_lb_target_set(_sa_re_cov_params, re_family_map_sa,
+                                      resid_var_param, θ0_u)
+    else
+        ()
+    end
+    # Effective lb: min of anneal_min_sd and var_lb_value
+    var_lb_eff = min(method.saem.anneal_min_sd, method.saem.var_lb_value)
 
     # O2+O4+O5: preallocated ring buffer for SA sample history
     sample_store = _init_saem_sample_store(method.saem.max_store, batch_infos)
@@ -2189,7 +2520,8 @@ function _fit_model(dm::DataModel, method::SAEM, args...;
     haskey(tkwargs, :verbose)   || (tkwargs = merge(tkwargs, (verbose=false,)))
 
     for iter in 1:method.saem.maxiters
-        γ = _saem_gamma(iter, method.saem.t0, method.saem.kappa)
+        γ = _saem_gamma_schedule(iter, method.saem)
+        sched_phase = _saem_schedule_phase(iter, method.saem)
         updated = _saem_batches!(q_cache.batches_buf, method.saem.update_schedule, length(batch_infos), iter, rng)
 
         θt_curr = θ_prev isa ComponentArray ? θ_prev : ComponentArray(θ_prev, axs_free)
@@ -2215,24 +2547,29 @@ function _fit_model(dm::DataModel, method::SAEM, args...;
             caches = _saem_thread_caches(dm, ll_cache, nthreads)
             Threads.@threads for bi in updated
                 info = batch_infos[bi]
-                samples, lastp, lastb = _mcem_sample_batch(dm, info, θu_curr, const_cache, caches[Threads.threadid()],
-                                                           method.saem.sampler, tkwargs, batch_rngs[bi],
-                                                           re_names, method.saem.warm_start, last_params[bi];
-                                                           anneal_sds=anneal_sds)
-                b_current[bi] = lastb
-                last_params[bi] = lastp
+                for c in 1:effective_n_chains
+                    _, lastp, lastb = _mcem_sample_batch(dm, info, θu_curr, const_cache, caches[Threads.threadid()],
+                                                         method.saem.sampler, tkwargs, batch_rngs[bi],
+                                                         re_names, method.saem.warm_start, last_chain_params[bi][c];
+                                                         anneal_sds=anneal_sds)
+                    b_chains[bi][c] = lastb
+                    last_chain_params[bi][c] = lastp
+                end
             end
         else
             for bi in updated
                 info = batch_infos[bi]
-                samples, lastp, lastb = _mcem_sample_batch(dm, info, θu_curr, const_cache, ll_cache,
-                                                           method.saem.sampler, tkwargs, batch_rngs[bi],
-                                                           re_names, method.saem.warm_start, last_params[bi];
-                                                           anneal_sds=anneal_sds)
-                b_current[bi] = lastb
-                last_params[bi] = lastp
+                for c in 1:effective_n_chains
+                    _, lastp, lastb = _mcem_sample_batch(dm, info, θu_curr, const_cache, ll_cache,
+                                                         method.saem.sampler, tkwargs, batch_rngs[bi],
+                                                         re_names, method.saem.warm_start, last_chain_params[bi][c];
+                                                         anneal_sds=anneal_sds)
+                    b_chains[bi][c] = lastb
+                    last_chain_params[bi][c] = lastp
+                end
             end
         end
+        _saem_update_b_current!(b_current, b_chains, updated, effective_n_chains)
 
 
         if method.saem.suffstats !== nothing
@@ -2329,6 +2666,7 @@ function _fit_model(dm::DataModel, method::SAEM, args...;
         θ_const_t = θ_const_t_iter
         axs_full = axs_full_iter
 
+        anneal_was_active = false
         all_fixed_by_builtin = isempty(free_names_iter)
         if all_fixed_by_builtin
             θ_prev_new = copy(θt_free)
@@ -2358,10 +2696,15 @@ function _fit_model(dm::DataModel, method::SAEM, args...;
                     setproperty!(θt_full, name, getproperty(θt_free, name))
                 end
                 θu = inv_transform(θt_full)
-                Q = method.saem.suffstats !== nothing && method.saem.q_from_stats !== nothing ?
-                    method.saem.q_from_stats(s, θu, dm) :
+                Q = if method.saem.suffstats !== nothing && method.saem.q_from_stats !== nothing
+                    method.saem.q_from_stats(s, θu, dm)
+                elseif method.saem.mstep_sa_on_params
+                    _saem_Q_current(dm, batch_infos, θu, const_cache, ll_cache, b_current;
+                                    serialization=serialization, anneal_sds=anneal_sds)
+                else
                     _saem_Q(dm, batch_infos, θu, const_cache, ll_cache, sample_store;
                             serialization=serialization, q_cache=q_cache, anneal_sds=anneal_sds)
+                end
                 !isfinite(Q) && return T(Inf)
                 obj = -Q + _penalty_value(θu, penalty)
                 !isfinite(obj) && return T(Inf)
@@ -2420,10 +2763,19 @@ function _fit_model(dm::DataModel, method::SAEM, args...;
                 end
             else
                 numeric_mstep_used = true
+                θt_free_before = method.saem.mstep_sa_on_params ? collect(θt_free) : nothing
                 sol = Optimization.solve(prob, method.optimizer; method.optim_kwargs...)
                 θ_hat_t_raw = sol.u
-                θ_hat_t_free = θ_hat_t_raw isa ComponentArray ? θ_hat_t_raw : ComponentArray(θ_hat_t_raw, axs_free)
-                θt_free = θ_hat_t_free
+                θ_hat_t_free = θ_hat_t_raw isa ComponentArray ? θ_hat_t_raw :
+                               ComponentArray(θ_hat_t_raw, axs_free)
+                if method.saem.mstep_sa_on_params
+                    # SA update: θ_new = θ_old + γ*(θ̂ − θ_old)
+                    θt_free = ComponentArray(
+                        θt_free_before .+ γ .* (collect(θ_hat_t_free) .- θt_free_before),
+                        axs_free)
+                else
+                    θt_free = θ_hat_t_free
+                end
             end
             θ_prev_new = copy(θt_free)
 
@@ -2441,6 +2793,27 @@ function _fit_model(dm::DataModel, method::SAEM, args...;
         end
         Q_new = Q_new == Inf ? T0(Inf) : Q_new
 
+        # SA annealing clamp (post M-step)
+        if do_sa_anneal
+            θu_new_clamped = _saem_apply_sa_anneal_clamp(
+                θu_new, sa_anneal_targets_eff, sa_anneal_initial_vals,
+                iter, sa_anneal_iters_eff, method.saem.sa_anneal_alpha, method.saem.sa_anneal_schedule)
+            if θu_new_clamped !== θu_new
+                θu_new = θu_new_clamped
+                θt_full = transform(θu_new)
+                for name in base_free_names
+                    setproperty!(θt_free, name, getproperty(θt_full, name))
+                end
+                θ_prev_new = copy(θt_free)
+            end
+        end
+        anneal_was_active = do_sa_anneal && iter <= sa_anneal_iters_eff
+
+        # Var lb clamp (post M-step)
+        if !isempty(var_lb_targets)
+            θu_new = _saem_apply_var_lb(θu_new, var_lb_targets, var_lb_eff)
+        end
+
         θ_full_vec = θt_full
         dθ_abs = _maxabsdiff(θ_full_vec, θ_prev_full)
         dθ_rel = dθ_abs / max(T0(1.0), _maxabs(θ_prev_full))
@@ -2455,11 +2828,15 @@ function _fit_model(dm::DataModel, method::SAEM, args...;
         push!(diag.dQ_rel, dQ_rel)
         push!(diag.gamma, T0(γ))
         push!(diag.batches, collect(updated))
+        push!(diag.schedule_phase, sched_phase)
+        push!(diag.n_chains_used, effective_n_chains)
+        push!(diag.anneal_active, anneal_was_active)
 
+        obsLL_new = T0(_saem_obsLL(dm, batch_infos, θu_new, const_cache, ll_cache, b_current))
         if method.saem.verbose
-            @info "SAEM iteration" iter=iter γ=γ Q=Q_new dθ_abs=dθ_abs dθ_rel=dθ_rel dQ_abs=dQ_abs dQ_rel=dQ_rel
+            @info "SAEM iteration" iter=iter γ=γ Q=Q_new obsLL=obsLL_new dθ_abs=dθ_abs dθ_rel=dθ_rel dQ_abs=dQ_abs dQ_rel=dQ_rel
         end
-        ProgressMeter.next!(progress; showvalues=[(:iter, iter), (:gamma, γ), (:Q, Q_new)])
+        ProgressMeter.next!(progress; showvalues=[(:iter, iter), (:gamma, γ), (:Q, Q_new), (:obsLL, obsLL_new)])
 
         θ_prev = θ_prev_new
         θ_prev_full = θ_full_vec
@@ -2476,7 +2853,7 @@ function _fit_model(dm::DataModel, method::SAEM, args...;
         else
             q_streak = 0
         end
-        if iter > method.saem.t0 &&
+        if _saem_past_stabilization_phase(iter, method.saem) &&
            param_streak >= method.saem.consecutive_params &&
            q_streak >= method.saem.consecutive_params
             converged = true
@@ -2508,7 +2885,12 @@ function _fit_model(dm::DataModel, method::SAEM, args...;
                          FitParameters(θ_hat_t, θ_hat_u),
                          notes)
     diagnostics = FitDiagnostics((;), (optimizer=method.optimizer,),
-                                 (saem_iters=length(diag.Q_hist), dθ_abs=diag.dθ_abs[end], dQ_abs=diag.dQ_abs[end]),
+                                 (saem_iters=length(diag.Q_hist),
+                                  dθ_abs=diag.dθ_abs[end], dQ_abs=diag.dQ_abs[end],
+                                  gamma=diag.gamma,
+                                  schedule_phase=diag.schedule_phase,
+                                  n_chains_used=diag.n_chains_used,
+                                  anneal_active=diag.anneal_active),
                                  notes)
     ebe = EBEOptions(method.saem.ebe_optimizer, method.saem.ebe_optim_kwargs, method.saem.ebe_adtype,
                      method.saem.ebe_grad_tol, method.saem.ebe_multistart_n, method.saem.ebe_multistart_k,

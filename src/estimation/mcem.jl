@@ -655,7 +655,7 @@ function _fit_model(dm::DataModel, method::MCEM, args...;
 
     q_cache = _init_mcem_q_cache(T0, serialization)
 
-    last_params = Vector{Union{Nothing, NamedTuple, AbstractVector}}(undef, length(batch_infos))
+    last_params = Vector{Union{Nothing, NamedTuple, AbstractVector, _AdaptiveMHState, _SaemixMHState}}(undef, length(batch_infos))
     fill!(last_params, nothing)
     batch_rngs = _mcem_thread_rngs(rng, length(batch_infos))
     θ_prev = copy(θt_free)
