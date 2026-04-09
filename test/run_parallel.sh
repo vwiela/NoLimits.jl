@@ -67,6 +67,7 @@ TESTS=(
   estimation_focei_tests.jl
   estimation_focei_map_tests.jl
   estimation_mcem_tests.jl
+  estimation_mcem_is_tests.jl
   estimation_saem_tests.jl
   estimation_saem_autodetect_tests.jl
   estimation_saem_suffstats_tests.jl

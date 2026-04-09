@@ -10,7 +10,8 @@ using OptimizationBBO
 
 @testset "MCEM default sampler" begin
     method = NoLimits.MCEM()
-    @test method.mcmc.sampler isa NUTS
+    @test method.e_step isa NoLimits.MCEM_MCMC
+    @test method.e_step.sampler isa NUTS
     @test method.ebe.multistart_n == 50
     @test method.ebe.multistart_k == 10
     @test method.ebe.sampling == :lhs

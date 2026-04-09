@@ -2,10 +2,100 @@
 
 The Monte Carlo Expectation-Maximization (MCEM) algorithm is a likelihood-based approach for fitting nonlinear mixed-effects models when the marginal likelihood cannot be computed in closed form. It alternates between two steps:
 
-- an **MCMC E-step** that draws samples from the conditional distribution of random effects given the current fixed-effect estimates, and
+- an **E-step** that draws samples from (or forms a weighted approximation of) the conditional distribution of random effects given the current fixed-effect estimates, and
 - an **optimization-based M-step** that updates the fixed effects by maximizing the Monte Carlo approximation of the expected complete-data log-likelihood.
 
 This formulation accommodates arbitrary nonlinear observation models, including those defined through ordinary differential equations, without requiring analytically tractable integrals over the random effects.
+
+## E-Step Strategies
+
+MCEM supports two E-step implementations, controlled by the `e_step` argument.
+
+### MCMC E-step (`MCEM_MCMC`)
+
+The default strategy. Draws samples from the exact conditional distribution `p(b | y, θ)` using [Turing.jl](https://turinglang.org/).
+
+```julia
+NoLimits.MCEM_MCMC(;
+    sampler        = Turing.NUTS(0.75),
+    turing_kwargs  = NamedTuple(),
+    sample_schedule = 250,
+    warm_start     = true,
+)
+```
+
+- `sampler` — Turing sampler. Common choices: `MH()`, `NUTS(...)`.
+- `turing_kwargs` — forwarded to Turing; the keys `n_samples` and `n_adapt` are interpreted explicitly.
+- `sample_schedule` — number of MCMC samples per iteration; accepts an integer, a vector (iteration-indexed), or a function `iter -> n_samples`.
+- `warm_start` — when `true`, reuses previous latent-state values as chain initialization.
+
+### Importance Sampling E-step (`MCEM_IS`)
+
+An alternative E-step based on self-normalized importance sampling (IS). Samples are drawn from a tractable proposal `q(b)` and reweighted by `log p(y, b | θ) − log q(b)`. The weighted Q-function replaces the uniform average used by the MCMC E-step.
+
+IS is often substantially faster per iteration than MCMC because it requires only independent forward passes through the log-likelihood rather than a sequential Markov chain.
+
+```julia
+NoLimits.MCEM_IS(;
+    n_samples             = 200,
+    proposal              = :prior,
+    adapt                 = true,
+    warm_start_mcmc_iters = 0,
+    mcmc_warmup           = nothing,
+)
+```
+
+- `n_samples` — number of IS draws per E-step iteration.
+- `proposal` — proposal distribution (see [Proposal Modes](@ref) below).
+- `adapt` — when `true`, updates the Gaussian proposal blocks after each IS iteration using IS-weighted statistics of the current samples.
+- `warm_start_mcmc_iters` — number of initial iterations to run with the MCMC E-step before switching to IS. Use this to pre-warm the Gaussian proposal.
+- `mcmc_warmup` — an `MCEM_MCMC` configuration used during the warm-up phase (required when `warm_start_mcmc_iters > 0`).
+
+#### Proposal Modes
+
+| `proposal` | Behavior |
+|---|---|
+| `:prior` | Each RE level is sampled independently from its prior `p(η \| θ)`. No adaptation. |
+| `:gaussian` | Adaptive block-diagonal Gaussian in the bijected (unconstrained) space. Falls back to the prior in the first iteration. The blocks are updated after each iteration using IS-weighted posterior statistics. |
+| `Function` | User-supplied function with signature `(θ, batch_info, re_dists, rng, n_samples) → (samples, log_qs)`. |
+
+The `:gaussian` proposal approximates the per-individual posterior `p(η | yᵢ, θ)` in the bijected space. Because all samples are independent, the effective sample size (ESS) is typically close to `n_samples`, and the proposal improves with each iteration.
+
+#### MCMC Warm-up then IS
+
+When the Gaussian proposal needs a cold start, a short MCMC warm-up can be used to initialize the blocks before switching to IS:
+
+```julia
+es = NoLimits.MCEM_IS(
+    n_samples             = 200,
+    proposal              = :gaussian,
+    adapt                 = true,
+    warm_start_mcmc_iters = 5,
+    mcmc_warmup           = NoLimits.MCEM_MCMC(
+        sampler       = MH(),
+        turing_kwargs = (n_samples=50, n_adapt=0, progress=false),
+    ),
+)
+```
+
+Iterations 1–5 use the MCMC E-step; the Gaussian proposal is initialized from those MCMC samples (with uniform weights). From iteration 6 onward the IS E-step is used.
+
+#### User-Supplied Proposal
+
+```julia
+function my_proposal(θ, batch_info, re_dists, rng, n_samples)
+    nb = batch_info.n_b
+    samples = randn(rng, nb, n_samples) .* 2.0
+    log_qs  = vec(sum(logpdf.(Normal(0.0, 2.0), samples); dims=1))
+    return samples, log_qs
+end
+
+es = NoLimits.MCEM_IS(n_samples=100, proposal=my_proposal)
+```
+
+The function must return:
+- `samples` — matrix of shape `(n_b, n_samples)` where `n_b` is the total dimension of all RE levels in the batch.
+- `log_qs` — vector of length `n_samples` containing `log q(bₘ)` for each draw.
 
 ## Applicability
 
@@ -18,8 +108,6 @@ If fixed-effect priors are defined in the model, MCEM ignores them in its object
 
 ## Basic Usage
 
-The following example illustrates a minimal MCEM workflow with a nonlinear observation model.
-
 ```julia
 using NoLimits
 using DataFrames
@@ -28,8 +116,8 @@ using Turing
 
 model = @Model begin
     @fixedEffects begin
-        a = RealNumber(0.2)
-        b = RealNumber(0.1)
+        a     = RealNumber(0.2)
+        b     = RealNumber(0.1)
         sigma = RealNumber(0.3, scale=:log)
     end
 
@@ -38,30 +126,52 @@ model = @Model begin
     end
 
     @randomEffects begin
-        eta = RandomEffect(TDist(6.0); column=:ID)
+        eta = RandomEffect(Normal(0.0, 1.0); column=:ID)
     end
 
     @formulas begin
-        mu = a + b * t + exp(eta)   # nonlinear in random effects
-        y ~ Normal(mu, sigma)
+        mu = a + b * t + exp(eta)
+        y  ~ Normal(mu, sigma)
     end
 end
 
 df = DataFrame(
     ID = [:A, :A, :B, :B, :C, :C],
-    t = [0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
-    y = [1.0, 1.3, 0.9, 1.2, 1.1, 1.5],
+    t  = [0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+    y  = [1.0, 1.3, 0.9, 1.2, 1.1, 1.5],
 )
 
 dm = DataModel(model, df; primary_id=:ID, time_col=:t)
+```
 
-method = NoLimits.MCEM(;
-    sampler=MH(),
-    turing_kwargs=(n_samples=20, n_adapt=0, progress=false),
-    maxiters=10,
-)
+**MCMC E-step (classic):**
 
-res = fit_model(dm, method)
+```julia
+res = fit_model(dm, NoLimits.MCEM(
+    e_step  = NoLimits.MCEM_MCMC(
+        sampler       = MH(),
+        turing_kwargs = (n_samples=50, n_adapt=0, progress=false),
+    ),
+    maxiters = 30,
+))
+```
+
+**IS E-step with prior proposal:**
+
+```julia
+res = fit_model(dm, NoLimits.MCEM(
+    e_step   = NoLimits.MCEM_IS(n_samples=200, proposal=:prior),
+    maxiters = 30,
+))
+```
+
+**IS E-step with adaptive Gaussian proposal:**
+
+```julia
+res = fit_model(dm, NoLimits.MCEM(
+    e_step   = NoLimits.MCEM_IS(n_samples=200, proposal=:gaussian, adapt=true),
+    maxiters = 30,
+))
 ```
 
 ## Constructor Options
@@ -75,13 +185,21 @@ using LineSearches
 using Turing
 
 method = NoLimits.MCEM(;
+    # E-step (new unified interface)
+    e_step=NoLimits.MCEM_MCMC(),          # or MCEM_IS(...)
+
+    # Backward-compatible MCMC shorthand (passed to MCEM_MCMC internally)
+    # sampler=Turing.NUTS(0.75),
+    # turing_kwargs=NamedTuple(),
+    # sample_schedule=250,
+    # warm_start=true,
+
+    # M-step
     optimizer=OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracking()),
     optim_kwargs=NamedTuple(),
     adtype=Optimization.AutoForwardDiff(),
-    sampler=Turing.NUTS(0.75),
-    turing_kwargs=NamedTuple(),
-    sample_schedule=250,
-    warm_start=true,
+
+    # EM convergence
     verbose=false,
     progress=true,
     maxiters=100,
@@ -90,6 +208,8 @@ method = NoLimits.MCEM(;
     rtol_Q=1e-4,
     atol_Q=1e-6,
     consecutive_params=3,
+
+    # Final EB estimation
     ebe_optimizer=OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracking()),
     ebe_optim_kwargs=NamedTuple(),
     ebe_adtype=Optimization.AutoForwardDiff(),
@@ -104,6 +224,8 @@ method = NoLimits.MCEM(;
     ebe_rescue_max_rounds=8,
     ebe_rescue_grad_tol=:auto,
     ebe_rescue_multistart_sampling=:lhs,
+
+    # Bounds
     lb=nothing,
     ub=nothing,
 )
@@ -111,110 +233,84 @@ method = NoLimits.MCEM(;
 
 ## Option Groups
 
-The constructor arguments are organized into the following functional groups.
-
 | Group | Keywords | What they control |
 | --- | --- | --- |
+| E-step | `e_step` | Sampling or IS strategy for the random effects. |
 | M-step optimizer | `optimizer`, `optim_kwargs`, `adtype` | Optimization of fixed effects using [Optimization.jl](https://docs.sciml.ai/Optimization/stable/). |
-| E-step sampler | `sampler`, `turing_kwargs`, `sample_schedule`, `warm_start` | Sampling random effects per iteration. |
 | EM stopping | `maxiters`, `rtol_theta`, `atol_theta`, `rtol_Q`, `atol_Q`, `consecutive_params` | Iteration limit and convergence checks. |
+| Logging | `verbose`, `progress` | Diagnostic output and progress bar. |
 | Final EB estimation | `ebe_*` and `ebe_rescue_*` options | Post-fit empirical Bayes mode computation used by random-effects accessors and diagnostics. |
 | Bounds | `lb`, `ub` | Optional transformed-scale bounds for free fixed effects in M-step optimization. |
-
-The E-step sampling interface is built on [Turing.jl](https://turinglang.org/): the `sampler` and `turing_kwargs` arguments are forwarded to the underlying Turing sampling calls.
 
 ## Constructor Input Reference
 
 ### M-step Optimization Inputs
 
-These arguments configure the fixed-effect optimization performed at each MCEM iteration.
-
-- `optimizer`
-  - Optimizer for fixed effects in each MCEM iteration.
-  - Default: `OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracking())`.
-- `optim_kwargs`
-  - Keyword arguments forwarded to `Optimization.solve` for the M-step optimizer.
-- `adtype`
-  - Automatic differentiation backend for the M-step objective in `OptimizationFunction`.
-
-### E-step Sampling Inputs
-
-These arguments control the MCMC sampling of random effects at each iteration.
-
-- `sampler`
-  - Turing sampler used for random-effect sampling in each E-step.
-  - Default: `Turing.NUTS(0.75)`.
-- `turing_kwargs`
-  - Additional keyword arguments passed through to Turing sampling calls.
-  - The keys `n_samples` and `n_adapt` are interpreted explicitly by MCEM, then passed as sampling and adaptation sizes.
-- `sample_schedule`
-  - Controls the number of MCMC samples drawn per iteration.
-  - Accepted forms: an integer (constant across iterations), a vector (iteration-indexed), or a function `iter -> n_samples`.
-  - If a schedule value is `<= 0`, MCEM falls back to `turing_kwargs[:n_samples]` (or `100` if absent).
-- `warm_start`
-  - When `true`, reuses previous batch latent-state parameter values as initialization for the next E-step.
-- `verbose`
-  - Enables iteration-level logging of diagnostic quantities (`Q`, `dtheta`, `dQ`, sample count).
-- `progress`
-  - Enables or disables the progress bar.
+- `optimizer` — optimizer for fixed effects in each MCEM iteration. Default: `LBFGS` with backtracking line search.
+- `optim_kwargs` — keyword arguments forwarded to `Optimization.solve` for the M-step optimizer.
+- `adtype` — AD backend for the M-step objective.
 
 ### EM Convergence Inputs
 
-MCEM monitors both fixed-effect parameter stability and Q-function stability to determine convergence.
+MCEM monitors both fixed-effect parameter stability and Q-function stability.
 
-- `maxiters`
-  - Maximum number of MCEM iterations.
-- `rtol_theta`, `atol_theta`
-  - Relative and absolute tolerances for fixed-effect parameter stabilization.
-- `rtol_Q`, `atol_Q`
-  - Relative and absolute tolerances for Q-function stabilization.
-- `consecutive_params`
-  - Number of consecutive iterations that must simultaneously satisfy both parameter and Q stabilization criteria before convergence is declared.
+- `maxiters` — maximum number of MCEM iterations.
+- `rtol_theta`, `atol_theta` — relative and absolute tolerances for fixed-effect stabilization.
+- `rtol_Q`, `atol_Q` — relative and absolute tolerances for Q-function stabilization.
+- `consecutive_params` — number of consecutive iterations that must simultaneously satisfy both criteria before convergence is declared.
+- `verbose` — enables iteration-level logging of `Q`, `dtheta`, `dQ`, and sample count.
+- `progress` — enables or disables the progress bar.
 
 ### Final EB Mode Inputs
 
-After the EM iterations complete, MCEM computes empirical Bayes (EB) modal estimates of the random effects. These estimates are used by downstream accessors and diagnostic functions.
+After the EM iterations complete, MCEM computes empirical Bayes (EB) modal estimates of the random effects used by downstream accessors.
 
-- `ebe_optimizer`, `ebe_optim_kwargs`, `ebe_adtype`
-  - Optimizer, solve arguments, and AD backend for EB mode optimization.
-- `ebe_grad_tol`
-  - Gradient tolerance for the EB optimization (`:auto` selects a data-adaptive value).
-- `ebe_multistart_n`, `ebe_multistart_k`, `ebe_multistart_max_rounds`, `ebe_multistart_sampling`
-  - Multistart configuration for EB optimization, controlling the number of initial points, top candidates retained, maximum restart rounds, and sampling strategy.
-- `ebe_rescue_on_high_grad`
-  - Enables a rescue multistart procedure if the final EB gradient norm remains above threshold.
-- `ebe_rescue_multistart_n`, `ebe_rescue_multistart_k`, `ebe_rescue_max_rounds`, `ebe_rescue_grad_tol`, `ebe_rescue_multistart_sampling`
-  - Configuration for the rescue strategy.
+- `ebe_optimizer`, `ebe_optim_kwargs`, `ebe_adtype` — optimizer, solve arguments, and AD backend for EB mode optimization.
+- `ebe_grad_tol` — gradient tolerance for EB optimization (`:auto` selects a data-adaptive value).
+- `ebe_multistart_n`, `ebe_multistart_k`, `ebe_multistart_max_rounds`, `ebe_multistart_sampling` — multistart configuration for EB optimization.
+- `ebe_rescue_on_high_grad` — enables a rescue multistart if the final EB gradient norm remains above threshold.
+- `ebe_rescue_multistart_n`, `ebe_rescue_multistart_k`, `ebe_rescue_max_rounds`, `ebe_rescue_grad_tol`, `ebe_rescue_multistart_sampling` — configuration for the rescue strategy.
 
 ### Bound Inputs
 
-- `lb`, `ub`
-  - Optional transformed-scale bounds for free fixed effects in the M-step optimization.
-  - Parameters held constant (via the `constants` fit keyword) are removed from the optimized vector; any corresponding bound entries are ignored.
+- `lb`, `ub` — optional transformed-scale bounds for free fixed effects. Parameters held constant via the `constants` fit keyword are excluded automatically.
 
-## Detailed Behavior
+## Diagnostics
 
-This section provides additional details on selected options.
+The `notes` field of the fit result contains iteration-level diagnostics:
 
-- `sample_schedule`
-  - Can be:
-    - an integer (constant samples per MCEM iteration),
-    - a vector (iteration-indexed schedule),
-    - a function `(iter -> n_samples)`.
-- `sampler`
-  - Common tested choices are `MH()` and `NUTS(...)`.
-- Convergence
-  - MCEM checks both parameter stabilization and Q stabilization.
-  - Both must satisfy tolerances for `consecutive_params` iterations.
-- `warm_start=true`
-  - Reuses previous latent-state parameterization in the E-step where possible.
-- `store_eb_modes` (fit keyword)
-  - `true`: stores final EB modes in fit result.
-  - `false`: EB modes can be recomputed later when calling random-effects accessors.
+```julia
+diag = get_notes(res).diagnostics
+diag.Q_hist    # Vector{Float64} — Q-function value per iteration
+diag.ess_hist  # Vector{Float64} — effective sample size per iteration
+               #   IS iterations: ESS = 1/Σwₘ² ∈ [1, n_samples]
+               #   MCMC iterations: NaN
+```
+
+The ESS is a per-iteration summary of proposal quality. Values close to `n_samples` indicate that the proposal closely approximates the posterior; low values indicate weight degeneracy (proposal too wide or misaligned).
+
+```julia
+using Plots
+plot(diag.Q_hist,   label="Q", xlabel="iteration")
+plot(diag.ess_hist, label="ESS", xlabel="iteration")
+```
+
+## Backward Compatibility
+
+The legacy MCMC-only keyword interface is fully preserved. Existing code that does not use `e_step` continues to work:
+
+```julia
+# Old API — still works
+method = NoLimits.MCEM(
+    sampler       = MH(),
+    turing_kwargs = (n_samples=50, n_adapt=0, progress=false),
+    maxiters      = 20,
+)
+```
+
+When `sampler` or `turing_kwargs` are passed without an explicit `e_step`, they are forwarded to an internally constructed `MCEM_MCMC`.
 
 ## Fit Keywords
-
-In addition to the method constructor arguments, `fit_model` accepts several keyword arguments that control data-level settings for the MCEM run.
 
 ```julia
 res = fit_model(
@@ -257,39 +353,21 @@ lb, ub = default_bounds_from_start(dm; margin=1.0)
 method_bbo = NoLimits.MCEM(;
     optimizer=OptimizationBBO.BBO_adaptive_de_rand_1_bin_radiuslimited(),
     optim_kwargs=(iterations=20,),
-    sampler=MH(),
-    turing_kwargs=(n_samples=10, n_adapt=0, progress=false),
+    e_step=NoLimits.MCEM_IS(n_samples=100, proposal=:gaussian),
     maxiters=5,
     lb=lb,
     ub=ub,
 )
 ```
 
-The M-step and EB optimizers can be configured independently. The following example uses L-BFGS for both but with distinct iteration limits and multistart settings:
-
-```julia
-using OptimizationOptimJL
-using LineSearches
-
-method_two_stage = NoLimits.MCEM(;
-    optimizer=OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracking()),
-    optim_kwargs=(maxiters=120,),
-    ebe_optimizer=OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracking()),
-    ebe_optim_kwargs=(maxiters=60,),
-    ebe_grad_tol=:auto,
-    ebe_multistart_n=80,
-    ebe_multistart_k=16,
-)
-```
-
 ## Accessing Results
 
-After fitting, results are accessed through the standard accessor interface. MCEM returns point estimates (the EM solution) rather than a posterior chain.
+After fitting, results are accessed through the standard accessor interface.
 
 ```julia
 theta_u = NoLimits.get_params(res; scale=:untransformed)
-obj = get_objective(res)
-ok = get_converged(res)
+obj     = get_objective(res)
+ok      = get_converged(res)
 
-re_df = get_random_effects(res)
+re_df   = get_random_effects(res)
 ```

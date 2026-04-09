@@ -245,3 +245,72 @@ end
     ))
     @test NoLimits.get_objective(res) !== nothing
 end
+
+@testset "anneal_to_fixed: MvNormal RE — sd0 from initial distribution" begin
+    m = @Model begin
+        @fixedEffects begin
+            a     = RealNumber(0.2)
+            σ     = RealNumber(0.3; scale=:log)
+            omega = RealDiagonalMatrix([0.5, 0.5]; scale=:log)
+        end
+        @randomEffects begin
+            η = RandomEffect(MvNormal([0.0, 0.0], Diagonal(omega)); column=:ID)
+        end
+        @covariates begin
+            t = Covariate()
+        end
+        @formulas begin
+            y ~ Normal(a + η[1] + η[2], σ)
+        end
+    end
+    df = DataFrame(
+        ID=repeat(1:5, inner=4),
+        t=repeat([0.0, 1.0, 2.0, 3.0], 5),
+        y=0.5 .+ 0.1 .* randn(20)
+    )
+    dm = DataModel(m, df; primary_id=:ID, time_col=:t)
+    res = fit_model(dm, NoLimits.SAEM(;
+        sampler=MH(),
+        turing_kwargs=(n_samples=5, n_adapt=3, progress=false),
+        maxiters=20,
+        anneal_to_fixed=(:η,),
+        anneal_min_sd=1e-5,
+    ))
+    @test isfinite(NoLimits.get_objective(res))
+end
+
+@testset "anneal_to_fixed: MvNormal RE — all schedules accepted" begin
+    m = @Model begin
+        @fixedEffects begin
+            a     = RealNumber(0.2)
+            σ     = RealNumber(0.3; scale=:log)
+            omega = RealDiagonalMatrix([0.5, 0.5]; scale=:log)
+        end
+        @randomEffects begin
+            η = RandomEffect(MvNormal([0.0, 0.0], Diagonal(omega)); column=:ID)
+        end
+        @covariates begin
+            t = Covariate()
+        end
+        @formulas begin
+            y ~ Normal(a + η[1] + η[2], σ)
+        end
+    end
+    df = DataFrame(
+        ID=repeat(1:4, inner=3),
+        t=repeat([0.0, 1.0, 2.0], 4),
+        y=0.5 .+ 0.1 .* randn(12)
+    )
+    dm = DataModel(m, df; primary_id=:ID, time_col=:t)
+    for sched in (:exponential, :linear, :gamma)
+        res = fit_model(dm, NoLimits.SAEM(;
+            sampler=MH(),
+            turing_kwargs=(n_samples=3, n_adapt=2, progress=false),
+            maxiters=6,
+            anneal_to_fixed=(:η,),
+            anneal_schedule=sched,
+            anneal_min_sd=1e-5,
+        ))
+        @test isfinite(NoLimits.get_objective(res))
+    end
+end

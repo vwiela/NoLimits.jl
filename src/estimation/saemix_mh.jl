@@ -163,7 +163,7 @@ function _saemixmh_level_plp!(level_plp::Vector{Float64},
         dists = dists_builder(θ_re, const_cov, model_funs, helpers)
         dist  = getproperty(dists, re)
         if has_anneal && haskey(anneal_sds, re)
-            dist = Normal(mean(dist), getfield(anneal_sds, re))
+            dist = _saem_apply_anneal_dist(dist, getfield(anneal_sds, re))
         end
         r = lv.range
         if lv.dim == 1
@@ -296,7 +296,7 @@ function _saemixmh_kern1!(state::_SaemixMHState,
             dists = dists_builder(θ_re, const_cov, model_funs, helpers)
             dist  = getproperty(dists, re)
             if has_anneal && haskey(anneal_sds, re)
-                dist = Normal(mean(dist), getfield(anneal_sds, re))
+                dist = _saem_apply_anneal_dist(dist, getfield(anneal_sds, re))
             end
 
             # Propose η* ~ prior (or annealed prior)
@@ -385,7 +385,7 @@ function _saemixmh_kern2!(state::_SaemixMHState,
             dists = dists_builder(θ_re, const_cov, model_funs, helpers)
             dist  = getproperty(dists, re)
             if has_anneal && haskey(anneal_sds, re)
-                dist = Normal(mean(dist), getfield(anneal_sds, re))
+                dist = _saem_apply_anneal_dist(dist, getfield(anneal_sds, re))
             end
 
             r = lv.range

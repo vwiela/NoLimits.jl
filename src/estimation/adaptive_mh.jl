@@ -170,6 +170,46 @@ end
 @inline _amh_bij_log_jac(s::Symbol, z_new, z_old) = _amh_bij_log_jac(Val(s), z_new, z_old)
 
 # ---------------------------------------------------------------------------
+# Absolute log-Jacobian of the forward bijection η → z at a single point
+#
+# Used for importance sampling log-proposal density:
+#   log q(b) = log q_z(z) + _bij_log_jac_forward(type, z)
+# where z = bij_forward(η) and q_z is the Gaussian density in z-space.
+#
+# This is log|dz/dη|, distinct from _amh_bij_log_jac which returns a
+# *difference* of log-Jacobians (designed for MH acceptance ratios).
+# ---------------------------------------------------------------------------
+
+@inline _bij_log_jac_forward(::Val{:Normal}, ::Real)              = 0.0
+@inline _bij_log_jac_forward(::Val{:MvNormal}, ::AbstractVector)  = 0.0
+@inline _bij_log_jac_forward(::Val{:NormalizingPlanarFlow}, ::AbstractVector) = 0.0
+
+# LogNormal: z = log(η), dz/dη = 1/η = exp(-z) → log|dz/dη| = -z
+@inline _bij_log_jac_forward(::Val{:LogNormal}, z::Real)   = -Float64(z)
+
+# Exponential: same log bijection as LogNormal
+@inline _bij_log_jac_forward(::Val{:Exponential}, z::Real) = -Float64(z)
+
+# Beta: z = logit(η), dz/dη = 1/(η(1-η)) → log|dz/dη| = -log(η(1-η))
+@inline function _bij_log_jac_forward(::Val{:Beta}, z::Real)
+    b = 1.0 / (1.0 + exp(-Float64(z)))
+    return -log(max(b * (1.0 - b), 1e-300))
+end
+
+# Multivariate case for scalar-dispatched types — sum over elements
+@inline function _bij_log_jac_forward(v::Val, z::AbstractVector)
+    acc = 0.0
+    for zi in z
+        acc += _bij_log_jac_forward(v, zi)
+    end
+    return acc
+end
+
+# Fallback: identity bijection, Jacobian = 1
+@inline _bij_log_jac_forward(::Val, z)    = 0.0
+@inline _bij_log_jac_forward(s::Symbol, z) = _bij_log_jac_forward(Val(s), z)
+
+# ---------------------------------------------------------------------------
 # Initial proposal covariance from prior distribution
 # ---------------------------------------------------------------------------
 
@@ -510,7 +550,7 @@ function _amh_step!(state::_AdaptiveMHState, dm::DataModel,
             dists     = dists_builder(θ_re, const_cov, model_funs, helpers)
             dist      = getproperty(dists, block.re_name)
             if has_anneal && haskey(anneal_sds, block.re_name)
-                dist = Normal(mean(dist), getfield(anneal_sds, block.re_name))
+                dist = _saem_apply_anneal_dist(dist, getfield(anneal_sds, block.re_name))
             end
             η_for_lp  = re_info.is_scalar ? b[first(r)] : b[r]
             new_re_lp = Float64(logpdf(dist, η_for_lp))

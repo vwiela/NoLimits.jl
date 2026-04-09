@@ -1191,7 +1191,7 @@ function _laplace_logf_batch(dm::DataModel,
             dists = dists_builder(θ_re, const_cov, model_funs, helpers)
             dist = getproperty(dists, re)
             if has_anneal && haskey(anneal_sds, re)
-                dist = Normal(mean(dist), getfield(anneal_sds, re))
+                dist = _saem_apply_anneal_dist(dist, getfield(anneal_sds, re))
             end
             v = _re_value_from_b(info, level_id, b)
             v === nothing && continue

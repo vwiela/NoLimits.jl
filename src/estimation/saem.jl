@@ -117,7 +117,7 @@ end
 
 # ── anneal_to_fixed helpers ──────────────────────────────────────────────────
 
-function _saem_validate_anneal(anneal_to_fixed, anneal_schedule, dm)
+function _saem_validate_anneal(anneal_to_fixed, anneal_schedule, dm, θ_const_u)
     isempty(anneal_to_fixed) && return NamedTuple()
     anneal_schedule in (:exponential, :linear, :gamma) ||
         error("anneal_schedule must be :exponential, :linear, or :gamma. Got: $(anneal_schedule)")
@@ -126,6 +126,14 @@ function _saem_validate_anneal(anneal_to_fixed, anneal_schedule, dm)
     re_dist_exprs = get_re_dist_exprs(re)
     names = Symbol[]
     sds   = Float64[]
+    # Precompute initial distributions — needed to extract sd0 for MvNormal entries.
+    # The distribution builder expects natural (untransformed) parameters.
+    dists_ref = let
+        dists_builder = get_create_random_effect_distribution(re)
+        model_funs    = get_model_funs(dm.model)
+        helpers       = get_helper_funs(dm.model)
+        dists_builder(θ_const_u, dm.individuals[1].const_cov, model_funs, helpers)
+    end
     for name in anneal_to_fixed
         name isa Symbol || error("anneal_to_fixed: entries must be Symbols. Got: $name")
         name in re_names_set ||
@@ -133,16 +141,23 @@ function _saem_validate_anneal(anneal_to_fixed, anneal_schedule, dm)
         expr = getproperty(re_dist_exprs, name)
         # expr is like Expr(:call, :Normal, mu_expr, sd_expr)
         dist_name = expr.args[1]
-        dist_name == :Normal ||
-            error("anneal_to_fixed: RE :$name must have a Normal distribution. " *
-                  "Found: $(expr). Change to Normal(μ, σ) with a plain numeric literal SD.")
-        sd_expr = expr.args[3]
-        sd_expr isa Number ||
-            error("anneal_to_fixed: RE :$name has SD `$sd_expr` which is not a plain numeric " *
-                  "literal. `anneal_to_fixed` requires the SD to be a hardcoded number, " *
-                  "e.g. Normal(a, 0.5) where 0.5 is a literal. Got: $(expr)")
-        push!(names, name)
-        push!(sds, Float64(sd_expr))
+        if dist_name == :Normal
+            sd_expr = expr.args[3]
+            sd_expr isa Number ||
+                error("anneal_to_fixed: RE :$name has SD `$sd_expr` which is not a plain numeric " *
+                      "literal. `anneal_to_fixed` with Normal requires the SD to be a hardcoded " *
+                      "number, e.g. Normal(a, 0.5) where 0.5 is a literal. Got: $(expr)")
+            push!(names, name)
+            push!(sds, Float64(sd_expr))
+        elseif dist_name == :MvNormal
+            dist = getproperty(dists_ref, name)
+            sd0  = sqrt(maximum(diag(cov(dist))))
+            push!(names, name)
+            push!(sds, sd0)
+        else
+            error("anneal_to_fixed: RE :$name must have a Normal or MvNormal distribution. " *
+                  "Found: $(expr). Supported: Normal(μ, σ_literal) and MvNormal(μ, Σ).")
+        end
     end
     return NamedTuple{Tuple(names)}(Tuple(sds))
 end
@@ -164,8 +179,9 @@ function _saem_anneal_sd(sd0::Float64, min_sd::Float64, iter::Int, maxiters::Int
     return clamp(result, min_sd, sd0)
 end
 
-@inline function _saem_anneal_normal(d::Normal, sd::Real)
-    return Normal(mean(d), sd)
+@inline _saem_apply_anneal_dist(d::Normal, sd::Real) = Normal(mean(d), sd)
+@inline function _saem_apply_anneal_dist(d::AbstractMvNormal, sd::Real)
+    return MvNormal(mean(d), sd^2 * I)
 end
 
 @inline function _saem_thread_caches(dm::DataModel, ll_cache, nthreads::Int)
@@ -2407,7 +2423,7 @@ function _fit_model(dm::DataModel, method::SAEM, args...;
 
     # anneal_to_fixed validation
     anneal_initial_sds = _saem_validate_anneal(method.saem.anneal_to_fixed,
-                                               method.saem.anneal_schedule, dm)
+                                               method.saem.anneal_schedule, dm, θ_const_u)
     do_anneal = !isempty(anneal_initial_sds)
     anneal_names = do_anneal ? Tuple(keys(anneal_initial_sds)) : ()
     if do_anneal
