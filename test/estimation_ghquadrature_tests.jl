@@ -6,7 +6,7 @@ using DataFrames
 using ComponentArrays
 using OptimizationOptimJL
 using OptimizationBBO
-using LineSearches
+using NoLimits.LineSearches
 using FiniteDifferences
 using Random
 import Turing
@@ -1033,7 +1033,7 @@ end  # @testset "GHQuadrature Wald UQ"
     dm_uq = _make_map_ghq_dm()
 
     @testset "compute_uq GHQuadrature :profile level=2" begin
-        res = fit_model(dm_uq, GHQuadrature(level=2; optim_kwargs=(maxiters=400,)))
+        res = fit_model(dm_uq, GHQuadrature(level=3; optim_kwargs=(maxiters=400,)))
         uq  = compute_uq(res; method=:profile)
 
         @test uq isa NoLimits.UQResult
