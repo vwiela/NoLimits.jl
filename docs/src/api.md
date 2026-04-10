@@ -141,6 +141,8 @@ MAP
 Laplace
 LaplaceMAP
 MCEM
+MCEM_MCMC
+MCEM_IS
 SAEM
 MCMC
 Multistart
