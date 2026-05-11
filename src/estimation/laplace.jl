@@ -1068,8 +1068,6 @@ function _laplace_solve_batch!(dm::DataModel,
     optf = opt_entry[2]
     prob = OptimizationProblem(optf, b0_use, θ_val)
     sol = solve(prob, optimizer; optim_kwargs...)
-    # Inner EBE optimization failures are handled by caller fallback logic.
-    SciMLBase.successful_retcode(sol) || return nothing
     return sol
 end
 
@@ -1194,9 +1192,6 @@ function _laplace_compute_bstar_batch!(cache::_LaplaceCache,
         if !isfinite(g_best_norm)
             g_best_norm = Inf
         end
-    else
-        _laplace_store_bstar!(cache, bi, b_best)
-        return nothing
     end
     use_mcmc = mcmc_candidates !== nothing && size(mcmc_candidates, 2) > 0
     if g_best_norm > multistart.grad_tol && multistart.k > 0 && (multistart.n > 0 || use_mcmc)

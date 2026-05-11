@@ -430,7 +430,7 @@ SAEM(; optimizer=OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracking(
      resid_var_param=:σ,
      re_cov_params=NamedTuple(),
      re_mean_params=NamedTuple(),
-     ebe_optimizer=OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracking(maxstep=1.0)),
+     ebe_optimizer=OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracking()),
      ebe_optim_kwargs=NamedTuple(),
      ebe_adtype=Optimization.AutoForwardDiff(),
      ebe_grad_tol=:auto,
