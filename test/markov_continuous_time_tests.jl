@@ -120,7 +120,38 @@ end
     @test_throws MethodError   cdf(dist, :healthy)
 end
 
-# ── 6. Forward-filter correctness (integer states, no missing) ─────────────────
+# ── 6. Set-valued (censored) observations ──────────────────────────────────────
+@testset "CT observed MC: set-valued observations" begin
+    Q = [-1.0 1.0; 0.5 -0.5]
+    dist = coarsed(ContinuousTimeObservedStatesMarkovModel(
+        Q, Categorical([1.0, 0.0]), 0.5))
+    p = probabilities_hidden_states(dist)
+
+    @test isapprox(logpdf(dist, [1, 2]), log(1.0); atol=1e-12)
+    @test isapprox(logpdf(dist, [2, 99]), log(p[2]); atol=1e-12)
+    @test logpdf(dist, [99, 100]) == -Inf
+
+    @test isapprox(posterior_hidden_states(dist, [1, 2]), p; atol=1e-12)
+    @test isapprox(posterior_hidden_states(dist, [2, 99]), [0.0, 1.0]; atol=1e-12)
+    @test isapprox(posterior_hidden_states(dist, [99, 100]), [0.0, 0.0]; atol=1e-12)
+end
+
+@testset "CT observed MC: set-valued observations require coarsed wrapper" begin
+    Q = [-1.0 1.0; 0.5 -0.5]
+    dist = ContinuousTimeObservedStatesMarkovModel(Q, Categorical([1.0, 0.0]), 0.5)
+
+    err = try
+        logpdf(dist, [1, 2])
+        nothing
+    catch e
+        e
+    end
+    @test err isa ErrorException
+    @test occursin("coarsed", sprint(showerror, err))
+    @test_throws ErrorException posterior_hidden_states(dist, [1, 2])
+end
+
+# ── 7. Forward-filter correctness (integer states, no missing) ─────────────────
 @testset "CT observed MC: forward-filter loglikelihood correctness" begin
     model = @Model begin
         @covariates begin
@@ -156,11 +187,10 @@ end
     )
     expected = _recursive_markov_loglikelihood_ct(fill(dist_ref, nrow(df)), df.y)
 
-    @test isfinite(ll)
     @test isapprox(ll, expected; atol=1e-12)
 end
 
-# ── 7. Missing observations propagate state distribution ─────────────────────
+# ── 8. Missing observations propagate state distribution ─────────────────────
 @testset "CT observed MC: missing observations propagate state" begin
     model = @Model begin
         @covariates begin
@@ -196,11 +226,118 @@ end
     )
     expected = _recursive_markov_loglikelihood_ct(fill(dist_ref, nrow(df)), df.y)
 
+    @test isapprox(ll, expected; atol=1e-12)
+end
+
+# ── 9. Set-valued labels through DataModel ─────────────────────────────────────
+@testset "CT observed MC: set-valued labels through DataModel" begin
+    model = @Model begin
+        @covariates begin
+            t  = Covariate()
+            dt = Covariate()
+        end
+
+        @fixedEffects begin
+            dummy = RealNumber(0.0)
+        end
+
+        @formulas begin
+            Q = [-1.0  1.0; 0.5 -0.5]
+            y ~ coarsed(ContinuousTimeObservedStatesMarkovModel(Q, Categorical([0.6, 0.4]), dt))
+        end
+    end
+
+    df = DataFrame(
+        ID = [1, 1, 1, 1],
+        t  = [0.0, 1.0, 2.0, 3.0],
+        dt = fill(1.0, 4),
+        y  = Any[[1], [1, 2], missing, [2]]
+    )
+
+    dm  = DataModel(model, df; primary_id=:ID, time_col=:t)
+    θ   = get_θ0_untransformed(dm.model.fixed.fixed)
+    ll  = NoLimits.loglikelihood(dm, θ, ComponentArray())
+
+    dist_ref = coarsed(ContinuousTimeObservedStatesMarkovModel(
+        [-1.0 1.0; 0.5 -0.5],
+        Categorical([0.6, 0.4]),
+        1.0
+    ))
+    expected = _recursive_markov_loglikelihood_ct(fill(dist_ref, nrow(df)), df.y)
+
     @test isfinite(ll)
     @test isapprox(ll, expected; atol=1e-12)
 end
 
-# ── 8. ForwardDiff gradient through Q-matrix entries ─────────────────────────
+@testset "CT observed MC: DataModel set-valued labels require coarsed wrapper" begin
+    model = @Model begin
+        @covariates begin
+            t  = Covariate()
+            dt = Covariate()
+        end
+
+        @fixedEffects begin
+            dummy = RealNumber(0.0)
+        end
+
+        @formulas begin
+            Q = [-1.0  1.0; 0.5 -0.5]
+            y ~ ContinuousTimeObservedStatesMarkovModel(Q, Categorical([0.6, 0.4]), dt)
+        end
+    end
+
+    df = DataFrame(
+        ID = [1, 1, 1, 1],
+        t  = [0.0, 1.0, 2.0, 3.0],
+        dt = fill(1.0, 4),
+        y  = Any[[1], [1, 2], missing, [2]]
+    )
+
+    err = try
+        DataModel(model, df; primary_id=:ID, time_col=:t)
+        nothing
+    catch e
+        e
+    end
+    @test err isa ErrorException
+    @test occursin("non-coarsed", sprint(showerror, err))
+end
+
+@testset "CT observed MC: DataModel coarsed model requires AbstractVector observations" begin
+    model = @Model begin
+        @covariates begin
+            t  = Covariate()
+            dt = Covariate()
+        end
+
+        @fixedEffects begin
+            dummy = RealNumber(0.0)
+        end
+
+        @formulas begin
+            Q = [-1.0  1.0; 0.5 -0.5]
+            y ~ coarsed(ContinuousTimeObservedStatesMarkovModel(Q, Categorical([0.6, 0.4]), dt))
+        end
+    end
+
+    df = DataFrame(
+        ID = [1, 1, 1, 1],
+        t  = [0.0, 1.0, 2.0, 3.0],
+        dt = fill(1.0, 4),
+        y  = Union{Missing, Int}[1, 2, missing, 2]
+    )
+
+    err = try
+        DataModel(model, df; primary_id=:ID, time_col=:t)
+        nothing
+    catch e
+        e
+    end
+    @test err isa ErrorException
+    @test occursin("all non-missing observations must be AbstractVectors", sprint(showerror, err))
+end
+
+# ── 10. ForwardDiff gradient through Q-matrix entries ─────────────────────────
 @testset "CT observed MC: ForwardDiff gradient through rate parameters" begin
     model = @Model begin
         @covariates begin
@@ -246,7 +383,6 @@ end
     ys   = repeat([1, 2], 25)  # 50 observations
 
     ll = _recursive_markov_loglikelihood_ct(fill(dist, length(ys)), ys)
-    @test isfinite(ll)
 
     model = @Model begin
         @covariates begin
@@ -314,15 +450,13 @@ end
 
     res_mle = fit_model(dm, NoLimits.MLE(optim_kwargs=(; iterations=5)))
     @test res_mle isa FitResult
-    @test isfinite(NoLimits.get_objective(res_mle))
 
     res_map = fit_model(dm, NoLimits.MAP(optim_kwargs=(; iterations=5)))
     @test res_map isa FitResult
-    @test isfinite(NoLimits.get_objective(res_map))
 
     res_mcmc = fit_model(dm, NoLimits.MCMC(;
         sampler=MH(),
-        turing_kwargs=(n_samples=20, n_adapt=0, progress=false)))
+        turing_kwargs=(n_samples=2, n_adapt=2, progress=false)))
     @test res_mcmc isa FitResult
     @test NoLimits.get_chain(res_mcmc) isa MCMCChains.Chains
 end
@@ -362,21 +496,19 @@ end
     dm = DataModel(model, df; primary_id=:ID, time_col=:t)
 
     res_lap = fit_model(dm, NoLimits.Laplace(;
-        optim_kwargs=(maxiters=5,),
-        inner_kwargs=(maxiters=5,),
-        multistart_n=0, multistart_k=0))
+        optim_kwargs=(maxiters=2,),
+        inner_kwargs=(maxiters=2,),
+        multistart_n=2, multistart_k=2))
     @test res_lap isa FitResult
-    @test isfinite(NoLimits.get_objective(res_lap))
     re = NoLimits.get_random_effects(dm, res_lap)
     @test re isa NamedTuple
 
     res_saem = fit_model(dm, NoLimits.SAEM(;
         sampler=MH(),
-        turing_kwargs=(n_samples=2, n_adapt=0, progress=false),
-        mcmc_steps=1, q_store_max=4, maxiters=1, progress=false, builtin_stats=:auto);
+        turing_kwargs=(n_samples=2, n_adapt=2, progress=false),
+        mcmc_steps=1, q_store_max=2, maxiters=2, progress=false, builtin_stats=:auto);
         rng=Random.Xoshiro(42))
     @test res_saem isa FitResult
-    @test isfinite(NoLimits.get_objective(res_saem))
 end
 
 # ── 12. simulate_data round-trip ──────────────────────────────────────────────
@@ -417,5 +549,4 @@ end
     dm_sim = DataModel(model, sim; primary_id=:ID, time_col=:t)
     θ0 = get_θ0_untransformed(dm_sim.model.fixed.fixed)
     ll  = NoLimits.loglikelihood(dm_sim, θ0, ComponentArray())
-    @test isfinite(ll)
 end

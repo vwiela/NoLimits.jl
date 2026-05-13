@@ -32,7 +32,7 @@ fully optimised.
 - `n_draws_used::Int = 50`: number of candidates to fully optimise after screening.
 - `sampling::Symbol = :random`: sampling strategy for starting points: `:random` or `:lhs`
   (Latin hypercube sampling).
-- `serialization::SciMLBase.EnsembleAlgorithm = EnsembleSerial()`: parallelisation
+- `serialization::SciMLBase.EnsembleAlgorithm = EnsembleThreads()`: parallelisation
   strategy for running multiple starts.
 - `rng::AbstractRNG = Random.default_rng()`: random-number generator.
 - `progress::Bool = true`: whether to display progress bars for the screening and fitting phases.
@@ -74,7 +74,7 @@ function Multistart(; dists=NamedTuple(),
                     n_draws_requested::Int=100,
                     n_draws_used::Int=50,
                     sampling::Symbol=:random,
-                    serialization::SciMLBase.EnsembleAlgorithm=EnsembleSerial(),
+                    serialization::SciMLBase.EnsembleAlgorithm=EnsembleThreads(),
                     rng::AbstractRNG=Xoshiro(0),
                     progress::Bool=true)
     n_draws_requested < 0 && error("n_draws_requested must be ≥ 0.")
@@ -98,6 +98,15 @@ function _marginal(dist, i::Int)
     if dist isa Distributions.AbstractMvNormal
         μ = Distributions.mean(dist)
         Σ = Distributions.cov(dist)
+        return Normal(μ[i], sqrt(Σ[i, i]))
+    elseif dist isa Distributions.MvLogNormal
+        μ = Distributions.mean(dist.normal)
+        Σ = Distributions.cov(dist.normal)
+        return LogNormal(μ[i], sqrt(Σ[i, i]))
+    elseif dist isa Distributions.MvLogitNormal
+        i <= length(dist.normal) || return nothing
+        μ = Distributions.mean(dist.normal)
+        Σ = Distributions.cov(dist.normal)
         return Normal(μ[i], sqrt(Σ[i, i]))
     end
     return nothing
@@ -423,7 +432,7 @@ function fit_model(ms::Multistart, dm::DataModel, method::FittingMethod, args...
     progress         = ms.progress
     ode_args         = get(kw_nt, :ode_args,       ())
     ode_kwargs_inner = get(kw_nt, :ode_kwargs,      NamedTuple())
-    serialization    = get(kw_nt, :serialization,   EnsembleSerial())
+    serialization    = get(kw_nt, :serialization,   EnsembleThreads())
 
     all_starts = _multistart_initials(dm, ms)
     n_req  = length(all_starts)

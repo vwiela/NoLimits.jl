@@ -15,7 +15,7 @@ using Statistics
 function _require_re_supported(res::FitResult)
     if res.result isa MLEResult || res.result isa MAPResult
         @warn "Random-effects diagnostics are not available for MLE/MAP."
-        error("Random-effects diagnostics require Laplace/LaplaceMAP/FOCEI/FOCEIMAP/MCEM/SAEM/MCMC.")
+        error("Random-effects diagnostics require Laplace/LaplaceMAP/MCEM/SAEM/MCMC.")
     end
 end
 
@@ -97,6 +97,10 @@ showing how well the parametric distribution fits the estimated random-effect va
 - `flow_samples::Int = 500`: number of samples for normalizing-flow distributions.
 - `flow_plot::Symbol = :kde`: `:kde` or `:hist` for flow-based distributions.
 - `flow_bins::Int = 20`, `flow_bandwidth`: histogram bins / KDE bandwidth for flows.
+- `x_quantile::Float64 = 0.99`: coverage quantile used to set the x-axis range from the
+  fitted distribution (e.g. `0.99` spans the 0.5th–99.5th percentiles).
+- `xlims::Union{Nothing, Tuple{<:Real, <:Real}} = nothing`: explicit x-axis limits that
+  override the quantile-based range; the PDF grid is also computed over this range.
 - `rng::AbstractRNG = Random.default_rng()`: random-number generator.
 - `save_path::Union{Nothing, String} = nothing`: file path to save the plot.
 - `kwargs_subplot`, `kwargs_layout`: extra keyword arguments for subplots and layout.
@@ -118,6 +122,8 @@ function plot_random_effects_pdf(res::FitResult;
                                  flow_plot::Symbol=:kde,
                                  flow_bins::Int=20,
                                  flow_bandwidth::Union{Nothing, Float64}=nothing,
+                                 x_quantile::Float64=0.99,
+                                 xlims::Union{Nothing, Tuple{<:Real, <:Real}}=nothing,
                                  rng::AbstractRNG=Random.default_rng(),
                                  save_path::Union{Nothing, String}=nothing,
                                  plot_path::Union{Nothing, String}=nothing,
@@ -142,7 +148,7 @@ function plot_random_effects_pdf(res::FitResult;
     end
 
     plots = Vector{Any}()
-    xlims = nothing
+    xlims_acc = nothing
     ylims = nothing
     merge_limits = (lims, minv, maxv) -> lims === nothing ? (minv, maxv) :
         (min(lims[1], minv), max(lims[2], maxv))
@@ -192,7 +198,7 @@ function plot_random_effects_pdf(res::FitResult;
                         end
                         continue
                     end
-                    grid = _density_grid_continuous([dist_use], 0.99, 200)
+                    grid = _density_grid_continuous([dist_use], x_quantile, 200)
                     grid === nothing && continue
                     min_v = min(min_v, minimum(grid.y))
                     max_v = max(max_v, maximum(grid.y))
@@ -202,8 +208,9 @@ function plot_random_effects_pdf(res::FitResult;
                     @warn "Skipping RE pdf plot (insufficient draws)." re=re
                     continue
                 end
-                xgrid = range(min_v, max_v; length=200)
-                xlims = merge_limits(xlims, min_v, max_v)
+                xgrid = xlims !== nothing ? range(xlims[1], xlims[2]; length=200) :
+                        range(min_v, max_v; length=200)
+                xlims_acc = merge_limits(xlims_acc, min_v, max_v)
                 curves = Vector{Vector{Float64}}()
                 if flow_plot == :hist && !isempty(samples_by_draw)
                     edges = range(min_v, max_v; length=flow_bins + 1)
@@ -259,14 +266,14 @@ function plot_random_effects_pdf(res::FitResult;
                             ys = p.series_list[end][:y]
                             y_max = maximum(ys)
                             ylims!(p, (0.0, y_max * 1.05))
-                            xlims = merge_limits(xlims, minimum(samp), maximum(samp))
+                            xlims_acc = merge_limits(xlims_acc, minimum(samp), maximum(samp))
                             ylims = merge_limits(ylims, 0.0, y_max)
                         else
                             xk, yk = _kde_xy(samp; bandwidth=flow_bandwidth)
                             plot!(p, xk, yk; color=style.color_secondary, label="PDF")
                             y_max = maximum(yk)
                             ylims!(p, (0.0, y_max * 1.05))
-                            xlims = merge_limits(xlims, minimum(xk), maximum(xk))
+                            xlims_acc = merge_limits(xlims_acc, minimum(xk), maximum(xk))
                             ylims = merge_limits(ylims, 0.0, y_max)
                         end
                     else
@@ -278,14 +285,15 @@ function plot_random_effects_pdf(res::FitResult;
                         grid = _density_grid_discrete(dist_use, 0.995)
                         grid === nothing && continue
                         bar!(p, grid.vals, grid.probs; color=style.color_secondary, label="PMF")
-                        xlims = merge_limits(xlims, minimum(grid.vals), maximum(grid.vals))
+                        xlims_acc = merge_limits(xlims_acc, minimum(grid.vals), maximum(grid.vals))
                         ylims = merge_limits(ylims, minimum(grid.probs), maximum(grid.probs))
                     else
-                        grid = _density_grid_continuous([dist_use], 0.99, 200)
+                        grid = _density_grid_continuous([dist_use], x_quantile, 200;
+                                                        bounds=xlims)
                         grid === nothing && continue
                         pdf_vals = vec(grid.z[:, 1])
                         plot!(p, grid.y, pdf_vals; color=style.color_secondary, label="PDF")
-                        xlims = merge_limits(xlims, minimum(grid.y), maximum(grid.y))
+                        xlims_acc = merge_limits(xlims_acc, minimum(grid.y), maximum(grid.y))
                         ylims = merge_limits(ylims, minimum(pdf_vals), maximum(pdf_vals))
                     end
                 end
@@ -295,11 +303,15 @@ function plot_random_effects_pdf(res::FitResult;
         end
     end
 
-    if shared_x_axis || shared_y_axis
-        xlim_use = shared_x_axis && xlims !== nothing ? _pad_limits(xlims[1], xlims[2]) : nothing
-        ylim_use = shared_y_axis && ylims !== nothing ? _pad_limits(ylims[1], ylims[2]) : nothing
-        _apply_shared_axes!(plots, xlim_use, ylim_use)
+    xlim_use = if xlims !== nothing
+        xlims
+    elseif shared_x_axis && xlims_acc !== nothing
+        _pad_limits(xlims_acc[1], xlims_acc[2])
+    else
+        nothing
     end
+    ylim_use = shared_y_axis && ylims !== nothing ? _pad_limits(ylims[1], ylims[2]) : nothing
+    _apply_shared_axes!(plots, xlim_use, ylim_use)
     if isempty(plots)
         @warn "No random-effect pdf plots to display."
         p = create_styled_plot(title="No random-effect pdf plots to display.", style=style, kwargs_subplot...)
@@ -643,6 +655,23 @@ function _standardize_re(dist, val::Vector{Float64}; flow_samples::Int=500)
             return L \ (val .- μv)
         end
     end
+    if dist isa Distributions.MvLogNormal
+        z = log.(max.(val, 1e-300))
+        μ = try Float64.(Distributions.mean(dist.normal)) catch; return nothing end
+        Σ = try Matrix{Float64}(cov(dist.normal)) catch; return nothing end
+        L = try cholesky(Σ).L catch; return nothing end
+        return L \ (z .- μ)
+    end
+    if dist isa Distributions.MvLogitNormal
+        # ALR: z_i = log(η_i / η_{d+1}), inner d-dim coords
+        ηf  = max.(Float64.(val), 1e-300)
+        ref = ηf[end]
+        z   = log.(ηf[begin:end-1]) .- log(ref)
+        μ = try Float64.(Distributions.mean(dist.normal)) catch; return nothing end
+        Σ = try Matrix{Float64}(cov(dist.normal)) catch; return nothing end
+        L = try cholesky(Σ).L catch; return nothing end
+        return L \ (z .- μ)
+    end
     if dist isa Distributions.MultivariateDistribution && !(dist isa MvNormal)
         @warn "Skipping multivariate RE standardization for non-Normal distribution." dist=typeof(dist)
         return nothing
@@ -674,22 +703,30 @@ function _standardize_re(dist, val::Vector{Float64}; flow_samples::Int=500)
 end
 
 function _marginal_normal(dist, i::Int)
-    dist isa MvNormal || return nothing
-    μ = try
-        Distributions.mean(dist)
-    catch
-        return nothing
+    if dist isa MvNormal
+        μ = try Distributions.mean(dist) catch; return nothing end
+        Σ = try cov(dist) catch; return nothing end
+        μv = Float64.(collect(vec(μ)))
+        Σm = Matrix{Float64}(Σ)
+        i <= length(μv) || return nothing
+        return Normal(μv[i], sqrt(Σm[i, i]))
+    elseif dist isa Distributions.MvLogNormal
+        μ = try Distributions.mean(dist.normal) catch; return nothing end
+        Σ = try cov(dist.normal) catch; return nothing end
+        μv = Float64.(collect(vec(μ)))
+        Σm = Matrix{Float64}(Σ)
+        i <= length(μv) || return nothing
+        return LogNormal(μv[i], sqrt(Σm[i, i]))
+    elseif dist isa Distributions.MvLogitNormal
+        # Inner (ALR) marginal for i-th ALR coordinate (only valid for i ≤ inner dim d)
+        i <= length(dist.normal) || return nothing
+        μ = try Distributions.mean(dist.normal) catch; return nothing end
+        Σ = try cov(dist.normal) catch; return nothing end
+        μv = Float64.(collect(vec(μ)))
+        Σm = Matrix{Float64}(Σ)
+        return Normal(μv[i], sqrt(Σm[i, i]))
     end
-    Σ = try
-        cov(dist)
-    catch
-        return nothing
-    end
-    μv = μ isa Number ? [Float64(μ)] : Float64.(collect(vec(μ)))
-    Σm = Σ isa Number ? [Float64(Σ)] : Matrix{Float64}(Σ)
-    i <= length(μv) || return nothing
-    σ2 = Σm[i, i]
-    return Normal(μv[i], sqrt(σ2))
+    return nothing
 end
 
 function _kde_xy(vals; bandwidth=nothing)
@@ -728,6 +765,25 @@ function _interp_linear(x_src::AbstractVector, y_src::AbstractVector, x_tgt::Abs
 end
 
 function _mahalanobis(dist, val::Vector{Float64})
+    if dist isa Distributions.MvLogNormal
+        z = log.(max.(val, 1e-300))
+        μ = try Float64.(Distributions.mean(dist.normal)) catch; return nothing end
+        Σ = try Matrix{Float64}(cov(dist.normal)) catch; return nothing end
+        d = z .- μ
+        invΣ = try inv(Σ) catch; return nothing end
+        return dot(d, invΣ * d)
+    end
+    if dist isa Distributions.MvLogitNormal
+        # ALR: z_i = log(η_i / η_{d+1})
+        ηf  = max.(Float64.(val), 1e-300)
+        ref = ηf[end]
+        z   = log.(ηf[begin:end-1]) .- log(ref)
+        μ = try Float64.(Distributions.mean(dist.normal)) catch; return nothing end
+        Σ = try Matrix{Float64}(cov(dist.normal)) catch; return nothing end
+        dv = z .- μ
+        invΣ = try inv(Σ) catch; return nothing end
+        return dot(dv, invΣ * dv)
+    end
     if dist isa Distributions.MultivariateDistribution && !(dist isa MvNormal)
         @warn "Skipping Mahalanobis distance for non-Normal multivariate RE." dist=typeof(dist)
         return nothing
@@ -793,6 +849,8 @@ function plot_random_effect_distributions(res::FitResult;
                                           flow_plot::Symbol=:kde,
                                           flow_bins::Int=20,
                                           flow_bandwidth::Union{Nothing, Float64}=nothing,
+                                          x_quantile::Float64=0.99,
+                                          xlims::Union{Nothing, Tuple{<:Real, <:Real}}=nothing,
                                           rng::AbstractRNG=Random.default_rng(),
                                           save_path::Union{Nothing, String}=nothing,
                                           plot_path::Union{Nothing, String}=nothing,
@@ -811,8 +869,7 @@ function plot_random_effect_distributions(res::FitResult;
     end
 
     plots = Vector{Any}()
-    xlims_val = nothing
-    xlims = nothing
+    xlims_acc = nothing
     ylims = nothing
     θ_draws_cache = nothing
 
@@ -959,17 +1016,20 @@ function plot_random_effect_distributions(res::FitResult;
                     bar!(p, grid.vals, grid.probs; color=style.color_secondary, label="PMF")
                     vline!(p, [val[1]]; color=style.color_primary, label=ebe_label)
                     xlim = (minimum(grid.vals), maximum(grid.vals))
-                    xlims = xlims === nothing ? xlim : (min(xlims[1], xlim[1]), max(xlims[2], xlim[2]))
+                    xlims_acc = xlims_acc === nothing ? xlim :
+                                (min(xlims_acc[1], xlim[1]), max(xlims_acc[2], xlim[2]))
                     ylims = ylims === nothing ? (minimum(grid.probs), maximum(grid.probs)) :
                             (min(ylims[1], minimum(grid.probs)), max(ylims[2], maximum(grid.probs)))
                 else
-                    grid = _density_grid_continuous([dist_use], 0.99, 200)
+                    grid = _density_grid_continuous([dist_use], x_quantile, 200;
+                                                    bounds=xlims)
                     grid === nothing && error("Unable to build PDF grid for $(re).")
                     pdf_vals = vec(grid.z[:, 1])
                     plot!(p, grid.y, pdf_vals; color=style.color_secondary, label="PDF")
                     vline!(p, [val[1]]; color=style.color_primary, label=ebe_label)
                     xlim = (minimum(grid.y), maximum(grid.y))
-                    xlims = xlims === nothing ? xlim : (min(xlims[1], xlim[1]), max(xlims[2], xlim[2]))
+                    xlims_acc = xlims_acc === nothing ? xlim :
+                                (min(xlims_acc[1], xlim[1]), max(xlims_acc[2], xlim[2]))
                     ylims = ylims === nothing ? (minimum(pdf_vals), maximum(pdf_vals)) :
                             (min(ylims[1], minimum(pdf_vals)), max(ylims[2], maximum(pdf_vals)))
                 end
@@ -978,11 +1038,15 @@ function plot_random_effect_distributions(res::FitResult;
         end
     end
 
-    if shared_x_axis || shared_y_axis
-        xlim_use = shared_x_axis && xlims !== nothing ? _pad_limits(xlims[1], xlims[2]) : nothing
-        ylim_use = shared_y_axis && ylims !== nothing ? _pad_limits(ylims[1], ylims[2]) : nothing
-        _apply_shared_axes!(plots, xlim_use, ylim_use)
+    xlim_use = if xlims !== nothing
+        xlims
+    elseif shared_x_axis && xlims_acc !== nothing
+        _pad_limits(xlims_acc[1], xlims_acc[2])
+    else
+        nothing
     end
+    ylim_use = shared_y_axis && ylims !== nothing ? _pad_limits(ylims[1], ylims[2]) : nothing
+    _apply_shared_axes!(plots, xlim_use, ylim_use)
 
     if isempty(plots)
         @warn "No random-effect distributions to plot."

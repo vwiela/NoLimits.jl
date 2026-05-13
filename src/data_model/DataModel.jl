@@ -120,8 +120,13 @@ end
 struct EventCallbacks{C, R, RS, B}
     callback::C
     infusion_rates::R
+    init_infusion_rates::R
     init_resets::RS
     init_bolus::B
+    # All times at which the callback fires (infusion starts, stops, bolus, reset).
+    # Used by the plotting layer to ensure the dense time grid includes these times
+    # so that short infusions are not missed when tspan >> infusion duration.
+    all_times::Vector{Float64}
 end
 
 """
@@ -286,6 +291,86 @@ function _validate_formula_covariates_missing(model, df, config::DataModelConfig
         elseif p isa DynamicCovariateVector
             for c in p.columns
                 _check_covariate_missing(df, c, nothing, name, "all rows")
+            end
+        end
+    end
+    return nothing
+end
+
+@inline _is_observed_markov_outcome_dist(::Any) = false
+@inline _is_observed_markov_outcome_dist(::DiscreteTimeObservedStatesMarkovModel) = true
+@inline _is_observed_markov_outcome_dist(::ContinuousTimeObservedStatesMarkovModel) = true
+@inline _is_observed_markov_outcome_dist(::CoarsedObservedStatesMarkovModel) = true
+
+@inline _is_observed_markov_call_name(name) =
+    (name === :DiscreteTimeObservedStatesMarkovModel) ||
+    (name === :ContinuousTimeObservedStatesMarkovModel) ||
+    (name === :coarsed)
+
+function _has_observed_markov_outcomes(model)
+    ir = get_formulas_ir(model.formulas.formulas)
+    return any(_is_observed_markov_call_name, ir.call_heads)
+end
+
+@inline _is_coarsed_observed_markov_outcome_dist(::Any) = false
+@inline _is_coarsed_observed_markov_outcome_dist(::CoarsedObservedStatesMarkovModel) = true
+
+function _count_observation_vectors(df, config::DataModelConfig, col::Symbol)
+    vals = if config.evid_col === nothing
+        _get_col(df, col)
+    else
+        evid = _get_col(df, config.evid_col)
+        obs_idx = findall(==(0), evid)
+        _get_col(df, col)[obs_idx]
+    end
+    n_nonmissing = 0
+    n_vectors = 0
+    n_nonvectors = 0
+    for v in vals
+        ismissing(v) && continue
+        n_nonmissing += 1
+        if v isa AbstractVector
+            n_vectors += 1
+        else
+            n_nonvectors += 1
+        end
+    end
+    return n_nonmissing, n_vectors, n_nonvectors
+end
+
+function _validate_observed_markov_coarsed_usage(model, df, config::DataModelConfig)
+    isempty(config.obs_cols) && return nothing
+    _has_observed_markov_outcomes(model) || return nothing
+    obs_probe = _probe_first_observation_distributions(
+        model,
+        df;
+        primary_id=config.primary_id,
+        time_col=config.time_col,
+        evid_col=config.evid_col
+    )
+    for col in config.obs_cols
+        hasproperty(obs_probe, col) || continue
+        dist = getproperty(obs_probe, col)
+        _is_observed_markov_outcome_dist(dist) || continue
+
+        n_nonmissing, n_vectors, n_nonvectors = _count_observation_vectors(df, config, col)
+        n_nonmissing == 0 && continue
+
+        if _is_coarsed_observed_markov_outcome_dist(dist)
+            if n_nonvectors > 0
+                error(
+                    "Observation column $(col) uses `coarsed(...)`, but contains $(n_nonvectors) non-missing " *
+                    "entries that are not AbstractVectors (out of $(n_nonmissing) non-missing entries). " *
+                    "When using `coarsed(...)`, all non-missing observations must be AbstractVectors."
+                )
+            end
+        else
+            if n_vectors > 0
+                error(
+                    "Observation column $(col) contains $(n_vectors) non-missing AbstractVector entries " *
+                    "(out of $(n_nonmissing) non-missing entries), but the model uses a non-coarsed " *
+                    "observed Markov model. Wrap the distribution with `coarsed(...)` in @formulas."
+                )
             end
         end
     end
@@ -622,6 +707,8 @@ function _validate_re_group_identifiability(model, df, config::DataModelConfig)
     return nothing
 end
 
+const _warned_numeric_re_group_cols = Set{Vector{Symbol}}()
+
 function _info_numeric_re_group_levels(model, df)
     re_names = get_re_names(model.random.random)
     isempty(re_names) && return nothing
@@ -638,8 +725,11 @@ function _info_numeric_re_group_levels(model, df)
         push!(numeric_cols, col)
     end
     isempty(numeric_cols) && return nothing
+    sort!(numeric_cols)
+    numeric_cols in _warned_numeric_re_group_cols && return nothing
+    push!(_warned_numeric_re_group_cols, numeric_cols)
     cols_str = join(string.(numeric_cols), ", ")
-    @info "DataModel detected numeric random-effect grouping levels in column(s) $(cols_str). You wwill not be able to use constant random-effects. If you want to use constant random effects, consider relabeling your random effects to strings or symbols."
+    @info "DataModel detected numeric random-effect grouping levels in column(s) $(cols_str). You will not be able to use constant random-effects. If you want to use constant random effects, consider relabeling your random effects to strings or symbols."
     return nothing
 end
 
@@ -707,7 +797,9 @@ function _build_vary_cov(covariates, df, rows, obs_rows, time_col, include_t::Bo
     return NamedTuple(out)
 end
 
-function _build_saveat(df, rows, obs_rows, time_col, config::DataModelConfig, time_offsets::Vector{Float64})
+function _build_saveat(df, rows, obs_rows, time_col, config::DataModelConfig,
+                       time_offsets::Vector{Float64},
+                       callback_times::Vector{Float64}=Float64[])
     config.saveat_mode == :dense && return nothing
     tvals = _get_col(df, time_col)[obs_rows]
     if !isempty(time_offsets)
@@ -725,6 +817,11 @@ function _build_saveat(df, rows, obs_rows, time_col, config::DataModelConfig, ti
         if !isempty(evt_idx)
             tvals = vcat(tvals, _get_col(df, time_col)[rows][evt_idx])
         end
+    end
+    # Include infusion stop times (and any other callback-fire times) so that
+    # the saved ODE solution captures the state at those critical events.
+    if !isempty(callback_times)
+        tvals = vcat(tvals, callback_times)
     end
     return sort(unique(tvals))
 end
@@ -989,7 +1086,7 @@ function _build_callbacks(model, df, rows, config::DataModelConfig)
     resets_out = isempty(init_resets) ? nothing : init_resets
     bolus_out = isempty(init_bolus_pairs) ? nothing : init_bolus_pairs
     (cb === nothing && resets_out === nothing && bolus_out === nothing) && return nothing
-    return EventCallbacks(cb, infusion_rates, resets_out, bolus_out)
+    return EventCallbacks(cb, infusion_rates, copy(infusion_rates), resets_out, bolus_out, times)
 end
 
 @inline function _apply_initial_events!(u0, callbacks::EventCallbacks)
@@ -999,6 +1096,7 @@ end
     callbacks.init_bolus !== nothing && @inbounds for (idx, val) in callbacks.init_bolus
         u0[idx] += val
     end
+    copyto!(callbacks.infusion_rates, callbacks.init_infusion_rates)
     return u0
 end
 
@@ -1244,6 +1342,7 @@ function DataModel(model,
     saveat_mode = saveat_mode == :auto ? :saveat : saveat_mode
     config = DataModelConfig(primary_id, time_col, evid_col, amt_col, rate_col, cmt_col, obs_cols, serialization, saveat_mode)
     _validate_schema(model, df, config)
+    _validate_observed_markov_coarsed_usage(model, df, config)
 
     cov = model.covariates.covariates
     _validate_time_col_covariate(model, config)
@@ -1299,7 +1398,8 @@ function DataModel(model,
             tspan = (tmin, tmax)
         end
         re_groups = _build_re_groups(model, df, rows)
-        saveat = _build_saveat(df, rows, obs_rows, time_col, config, time_offsets)
+        cb_times = callbacks !== nothing ? callbacks.all_times : Float64[]
+        saveat = _build_saveat(df, rows, obs_rows, time_col, config, time_offsets, cb_times)
         individuals[i] = Individual(series, const_cov, callbacks, tspan, re_groups, saveat)
     end
 

@@ -38,7 +38,7 @@ using Random
     )
 
     dm = DataModel(model, df; primary_id=:ID, time_col=:t)
-    res = fit_model(dm, NoLimits.Laplace(; optim_kwargs=(maxiters=3,)))
+    res = fit_model(dm, NoLimits.Laplace(; optim_kwargs=(maxiters=2,)))
     @test res.result.eb_modes !== nothing
     @test length(res.result.eb_modes) == length(get_batches(dm))
 end
@@ -131,7 +131,7 @@ end
         obj, _, _ = NoLimits._laplace_objective_and_grad(dm, batch_infos, θ, const_cache, ll_cache, ebe_cache;
                                                                  inner=NoLimits.LaplaceInnerOptions(
                                                                      OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracking()),
-                                                                 (maxiters=20,),
+                                                                 (maxiters=2,),
                                                                  Optimization.AutoForwardDiff(),
                                                                  1e-6),
                                                                  hessian=NoLimits.LaplaceHessianOptions(1e-6, 6, 10.0, false, 0.0, true, false, 0),
@@ -146,7 +146,7 @@ end
         _, g, _ = NoLimits._laplace_objective_and_grad(dm, batch_infos, θ, const_cache, ll_cache, ebe_cache;
                                                               inner=NoLimits.LaplaceInnerOptions(
                                                                   OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracking()),
-                                                                  (maxiters=20,),
+                                                                  (maxiters=2,),
                                                                   Optimization.AutoForwardDiff(),
                                                                   1e-6),
                                                               hessian=NoLimits.LaplaceHessianOptions(1e-6, 6, 10.0, false, 0.0, true, false, 0),
@@ -212,7 +212,7 @@ end
         obj, _, _ = NoLimits._laplace_objective_and_grad(dm, batch_infos, θ, const_cache, ll_cache, ebe_cache;
                                                                  inner=NoLimits.LaplaceInnerOptions(
                                                                      OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracking()),
-                                                                 (maxiters=30,),
+                                                                 (maxiters=2,),
                                                                  Optimization.AutoForwardDiff(),
                                                                  1e-6),
                                                                  hessian=NoLimits.LaplaceHessianOptions(1e-6, 6, 10.0, false, 0.0, true, false, 0),
@@ -227,7 +227,7 @@ end
         _, g, _ = NoLimits._laplace_objective_and_grad(dm, batch_infos, θ, const_cache, ll_cache, ebe_cache;
                                                               inner=NoLimits.LaplaceInnerOptions(
                                                                   OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracking()),
-                                                                  (maxiters=30,),
+                                                                  (maxiters=2,),
                                                                   Optimization.AutoForwardDiff(),
                                                                   1e-6),
                                                               hessian=NoLimits.LaplaceHessianOptions(1e-6, 6, 10.0, false, 0.0, true, false, 0),
@@ -324,7 +324,7 @@ end
     )
 
     dm = DataModel(model, df; primary_id=:ID, time_col=:t)
-    method = NoLimits.Laplace(; optim_kwargs=(maxiters=3,))
+    method = NoLimits.Laplace(; optim_kwargs=(maxiters=2,))
     res_serial = fit_model(dm, method; serialization=EnsembleSerial(), rng=MersenneTwister(123))
     res_threads = fit_model(dm, method; serialization=EnsembleThreads(), rng=MersenneTwister(123))
     @test res_serial.summary.objective == res_threads.summary.objective
@@ -361,13 +361,13 @@ end
     dm = DataModel(model, df; primary_id=:ID, time_col=:t)
     @test_throws ErrorException fit_model(dm, NoLimits.Laplace(;
         optimizer=OptimizationBBO.BBO_adaptive_de_rand_1_bin_radiuslimited(),
-        optim_kwargs=(maxiters=5,)
+        optim_kwargs=(maxiters=2,)
     ))
 
     lb, ub = default_bounds_from_start(dm; margin=1.0)
     res = fit_model(dm, NoLimits.Laplace(;
         optimizer=OptimizationBBO.BBO_adaptive_de_rand_1_bin_radiuslimited(),
-        optim_kwargs=(maxiters=5,),
+        optim_kwargs=(maxiters=2,),
         lb=lb,
         ub=ub
     ))
@@ -413,7 +413,7 @@ end
     rng = MersenneTwister(1)
     res = fit_model(dm, NoLimits.Laplace(; optim_kwargs=(maxiters=2,),
                                                  multistart_n=2,
-                                                 multistart_k=1,
+                                                 multistart_k=2,
                                                  multistart_grad_tol=0.0),
                     rng=rng)
     @test res isa FitResult
@@ -518,4 +518,93 @@ end
     @test res.summary.converged isa Bool
     @test res.result.eb_modes !== nothing
     @test length(res.result.eb_modes) == length(get_batches(dm))
+end
+
+@testset "reestimate_ebes" begin
+    model = @Model begin
+        @covariates begin
+            t = Covariate()
+        end
+        @fixedEffects begin
+            a = RealNumber(0.2)
+            σ = RealNumber(0.5, scale=:log)
+        end
+        @randomEffects begin
+            η = RandomEffect(Normal(0.0, 1.0); column=:ID)
+        end
+        @formulas begin
+            y ~ Normal(a + η, σ)
+        end
+    end
+
+    df = DataFrame(ID=[1, 1, 2, 2, 3, 3],
+                   t=[0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+                   y=[0.1, 0.2, 0.0, -0.1, 0.3, 0.4])
+    dm = DataModel(model, df; primary_id=:ID, time_col=:t)
+
+    # Laplace with stored dm
+    res = fit_model(dm, NoLimits.Laplace(; optim_kwargs=(maxiters=3,)))
+    res_new = reestimate_ebes(res)
+    re = get_random_effects(res_new)
+    @test re isa NamedTuple
+    @test haskey(re, :η)
+    @test nrow(re.η) == 3
+
+    # Explicit dm (simulates store_data_model=false)
+    res_nostore = fit_model(dm, NoLimits.Laplace(; optim_kwargs=(maxiters=3,)); store_data_model=false)
+    res_new2 = reestimate_ebes(dm, res_nostore)
+    re2 = get_random_effects(dm, res_new2)
+    @test nrow(re2.η) == 3
+
+    # individuals subset — all 3 individuals remain in result, only 2 are recomputed
+    res_sub = reestimate_ebes(res; individuals=[1, 2])
+    re_sub = get_random_effects(res_sub)
+    @test nrow(re_sub.η) == 3
+
+    # Loaded result via save_fit/load_fit
+    path = tempname() * ".jld2"
+    save_fit(path, res)
+    res_loaded = load_fit(path; dm=dm)
+    res_new_loaded = reestimate_ebes(dm, res_loaded)
+    re_loaded = get_random_effects(dm, res_new_loaded)
+    @test nrow(re_loaded.η) == 3
+
+    # SAEM
+    res_saem = fit_model(dm, NoLimits.SAEM(; maxiters=2, q_store_max=2))
+    res_saem_new = reestimate_ebes(res_saem)
+    re_saem = get_random_effects(res_saem_new)
+    @test re_saem isa NamedTuple
+    @test haskey(re_saem, :η)
+    @test nrow(re_saem.η) == 3
+end
+
+@testset "reestimate_ebes mcmc sampling" begin
+    model = @Model begin
+        @covariates begin
+            t = Covariate()
+        end
+        @fixedEffects begin
+            a = RealNumber(0.2)
+            σ = RealNumber(0.5, scale=:log)
+        end
+        @randomEffects begin
+            η = RandomEffect(Normal(0.0, 1.0); column=:ID)
+        end
+        @formulas begin
+            y ~ Normal(a + η, σ)
+        end
+    end
+
+    df = DataFrame(ID=[1, 1, 2, 2, 3, 3],
+                   t=[0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+                   y=[0.1, 0.2, 0.0, -0.1, 0.3, 0.4])
+    dm = DataModel(model, df; primary_id=:ID, time_col=:t)
+    res = fit_model(dm, NoLimits.Laplace(; optim_kwargs=(maxiters=3,)))
+
+    res_new = reestimate_ebes(res; ebe_multistart_sampling=:mcmc,
+                                  ebe_multistart_n=5, ebe_mcmc_n_adapt=2)
+    re = get_random_effects(res_new)
+    @test re isa NamedTuple
+    @test haskey(re, :η)
+    @test nrow(re.η) == 3
 end

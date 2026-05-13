@@ -8,6 +8,8 @@ export fit_model
 export get_summary
 export get_params
 export get_random_effects
+export sample_random_effects
+export reestimate_ebes
 export get_diagnostics
 export get_result
 export get_method
@@ -59,7 +61,7 @@ contains optimiser closures that cannot be serialised) on save.
 `get_method(res).kind` returns a Symbol such as `:mle`, `:map`, `:laplace`, etc.
 """
 struct _SavedFittingMethod <: FittingMethod
-    kind::Symbol   # :mle :map :laplace :laplacemap :focei :foceimap
+    kind::Symbol   # :mle :map :laplace :laplacemap
                    # :mcem :saem :mcmc :vi :ghquadrature :ghquadraturemap
 end
 
@@ -595,8 +597,8 @@ function get_laplace_random_effects(dm::DataModel,
                                     constants_re::NamedTuple=NamedTuple(),
                                     flatten::Bool=true,
                                     include_constants::Bool=true)
-    (res.result isa LaplaceResult || res.result isa LaplaceMAPResult || res.result isa FOCEIResult || res.result isa FOCEIMAPResult || res.result isa GHQuadratureResult || res.result isa GHQuadratureMAPResult) ||
-        error("Laplace-style random-effects accessor requires a Laplace, LaplaceMAP, FOCEI, FOCEIMAP, GHQuadrature, or GHQuadratureMAP fit result.")
+    (res.result isa LaplaceResult || res.result isa LaplaceMAPResult || res.result isa GHQuadratureResult || res.result isa GHQuadratureMAPResult) ||
+        error("Laplace-style random-effects accessor requires a Laplace, LaplaceMAP, GHQuadrature, or GHQuadratureMAP fit result.")
     constants_re = _res_constants_re(res, constants_re)
     re_names = get_re_names(dm.model.random.random)
     isempty(re_names) && return NamedTuple()
@@ -634,6 +636,31 @@ function _eta_from_eb(dm::DataModel,
     return η_vec
 end
 
+function _compute_mcmc_candidates(dm::DataModel,
+                                  batch_infos::Vector,
+                                  const_cache,
+                                  θu::ComponentArray,
+                                  ll_cache,
+                                  sampler,
+                                  n_samples::Int,
+                                  n_adapt::Int,
+                                  rng::AbstractRNG,
+                                  active_batch_indices=nothing)
+    re_names = get_re_names(dm.model.random.random)
+    ll_local = ll_cache isa AbstractVector ? ll_cache[1] : ll_cache
+    turing_kwargs = (n_samples=n_samples, n_adapt=n_adapt, progress=false)
+    active_set = active_batch_indices === nothing ? nothing : Set(active_batch_indices)
+    return map(enumerate(batch_infos)) do (bi, info)
+        if info.n_b == 0 || (active_set !== nothing && !(bi ∈ active_set))
+            return Matrix{Float64}(undef, 0, 0)
+        end
+        samples, _, _ = _mcem_sample_batch(dm, info, θu, const_cache, ll_local,
+                                           sampler, turing_kwargs, rng,
+                                           re_names, false, nothing)
+        samples
+    end
+end
+
 function _compute_bstars(dm::DataModel,
                          θu::ComponentArray,
                          constants_re::NamedTuple,
@@ -642,7 +669,9 @@ function _compute_bstars(dm::DataModel,
                          rng::AbstractRNG;
                          rescue::Union{Nothing, EBERescueOptions}=nothing,
                          progress::Bool=false,
-                         progress_desc::AbstractString="Final EBE")
+                         progress_desc::AbstractString="Final EBE",
+                         mcmc_candidates_by_batch::Union{Nothing, Vector}=nothing,
+                         active_batch_indices::Union{Nothing, AbstractVector{Int}}=nothing)
     ebe = _resolve_ebe_options(ebe, dm)
     rescue = _resolve_ebe_rescue_options(rescue, ebe.grad_tol, dm)
     _, batch_infos, const_cache = _build_laplace_batch_infos(dm, constants_re)
@@ -658,11 +687,12 @@ function _compute_bstars(dm::DataModel,
     ebe_cache = _LaplaceCache(nothing, bstar_cache, grad_cache, ad_cache, hess_cache)
     ll_cache_local = ll_cache isa Vector ? ll_cache[1] : ll_cache
     ebe_serialization = ll_cache isa Vector ? SciMLBase.EnsembleThreads() : SciMLBase.EnsembleSerial()
+    active_set = active_batch_indices === nothing ? nothing : Set(active_batch_indices)
 
     function _batch_grad_norms()
         norms = Vector{Float64}(undef, n_batches)
         for (bi, info) in enumerate(batch_infos)
-            if info.n_b == 0
+            if info.n_b == 0 || (active_set !== nothing && !(bi ∈ active_set))
                 norms[bi] = 0.0
                 continue
             end
@@ -687,7 +717,9 @@ function _compute_bstars(dm::DataModel,
                                  rng=rng,
                                  serialization=ebe_serialization,
                                  progress=progress,
-                                 progress_desc="$(progress_desc) (pass 1)")
+                                 progress_desc="$(progress_desc) (pass 1)",
+                                 mcmc_candidates_by_batch=mcmc_candidates_by_batch,
+                                 active_batches=active_set)
 
     if rescue !== nothing && rescue.enabled && n_batches > 0
         norms_before = _batch_grad_norms()
@@ -703,7 +735,8 @@ function _compute_bstars(dm::DataModel,
                                          rng=rng,
                                          serialization=ebe_serialization,
                                          progress=progress,
-                                         progress_desc="$(progress_desc) (rescue)")
+                                         progress_desc="$(progress_desc) (rescue)",
+                                         active_batches=active_set)
             norms_after = _batch_grad_norms()
             if any(>(rescue_tol), norms_after)
                 @warn "Final EBE rescue multistart did not satisfy the EBE gradient tolerance for all batches." max_grad_before=maximum(norms_before) max_grad_after=maximum(norms_after) grad_tol=rescue_tol multistart_n=rescue.multistart_n multistart_k=rescue.multistart_k max_rounds=rescue.max_rounds
@@ -722,7 +755,7 @@ end
 Return empirical Bayes (EB) random-effect estimates as a `NamedTuple` of `DataFrame`s,
 one per random effect.
 
-Supported methods: `Laplace`, `LaplaceMAP`, `FOCEI`, `FOCEIMAP`, `MCEM`, `SAEM`.
+Supported methods: `Laplace`, `LaplaceMAP`, `MCEM`, `SAEM`, `GHQuadrature`, `GHQuadratureMAP`.
 
 # Keyword Arguments
 - `constants_re::NamedTuple = NamedTuple()`: fix random effects at given values (natural scale).
@@ -735,14 +768,14 @@ function get_random_effects(dm::DataModel,
                             flatten::Bool=true,
                             include_constants::Bool=true)
     constants_re = _res_constants_re(res, constants_re)
-    if res.result isa LaplaceResult || res.result isa LaplaceMAPResult || res.result isa FOCEIResult || res.result isa FOCEIMAPResult || res.result isa GHQuadratureResult || res.result isa GHQuadratureMAPResult
+    if res.result isa LaplaceResult || res.result isa LaplaceMAPResult || res.result isa GHQuadratureResult || res.result isa GHQuadratureMAPResult
         return get_laplace_random_effects(dm, res; constants_re=constants_re, flatten=flatten, include_constants=include_constants)
     end
     if res.result isa MCEMResult
         θu = get_params(res; scale=:untransformed)
         ode_args = haskey(res.fit_kwargs, :ode_args) ? getfield(res.fit_kwargs, :ode_args) : ()
         ode_kwargs = haskey(res.fit_kwargs, :ode_kwargs) ? getfield(res.fit_kwargs, :ode_kwargs) : NamedTuple()
-        serialization = haskey(res.fit_kwargs, :serialization) ? getfield(res.fit_kwargs, :serialization) : EnsembleSerial()
+        serialization = haskey(res.fit_kwargs, :serialization) ? getfield(res.fit_kwargs, :serialization) : EnsembleThreads()
         rng = haskey(res.fit_kwargs, :rng) ? getfield(res.fit_kwargs, :rng) : Random.default_rng()
         ll_cache = build_ll_cache(dm; ode_args=ode_args, ode_kwargs=ode_kwargs, serialization=serialization, force_saveat=true)
         bstars = res.result.eb_modes
@@ -757,9 +790,10 @@ function get_random_effects(dm::DataModel,
     end
     if res.result isa SAEMResult
         θu = get_params(res; scale=:untransformed)
+        constants_re = _saem_anneal_constants_re(dm, θu, _saem_anneal_names(res), constants_re)
         ode_args = haskey(res.fit_kwargs, :ode_args) ? getfield(res.fit_kwargs, :ode_args) : ()
         ode_kwargs = haskey(res.fit_kwargs, :ode_kwargs) ? getfield(res.fit_kwargs, :ode_kwargs) : NamedTuple()
-        serialization = haskey(res.fit_kwargs, :serialization) ? getfield(res.fit_kwargs, :serialization) : EnsembleSerial()
+        serialization = haskey(res.fit_kwargs, :serialization) ? getfield(res.fit_kwargs, :serialization) : EnsembleThreads()
         rng = haskey(res.fit_kwargs, :rng) ? getfield(res.fit_kwargs, :rng) : Random.default_rng()
         ll_cache = build_ll_cache(dm; ode_args=ode_args, ode_kwargs=ode_kwargs, serialization=serialization, force_saveat=true)
         bstars = res.result.eb_modes
@@ -789,6 +823,429 @@ function get_random_effects(res::FitResult;
     return get_random_effects(dm, res; constants_re=constants_re, flatten=flatten, include_constants=include_constants)
 end
 
+function _resolve_bstars_for_re(dm::DataModel, res::FitResult, constants_re::NamedTuple)
+    if res.result isa LaplaceResult || res.result isa LaplaceMAPResult || res.result isa GHQuadratureResult || res.result isa GHQuadratureMAPResult
+        θu = get_params(res; scale=:untransformed)
+        ode_args = haskey(res.fit_kwargs, :ode_args) ? getfield(res.fit_kwargs, :ode_args) : ()
+        ode_kwargs = haskey(res.fit_kwargs, :ode_kwargs) ? getfield(res.fit_kwargs, :ode_kwargs) : NamedTuple()
+        serialization = haskey(res.fit_kwargs, :serialization) ? getfield(res.fit_kwargs, :serialization) : EnsembleThreads()
+        ll_cache = build_ll_cache(dm; ode_args=ode_args, ode_kwargs=ode_kwargs, serialization=serialization, force_saveat=true)
+        _, batch_infos, const_cache = _build_laplace_batch_infos(dm, constants_re)
+        return res.result.eb_modes, batch_infos, θu, const_cache, ll_cache, constants_re
+    end
+    if res.result isa MCEMResult
+        θu = get_params(res; scale=:untransformed)
+        ode_args = haskey(res.fit_kwargs, :ode_args) ? getfield(res.fit_kwargs, :ode_args) : ()
+        ode_kwargs = haskey(res.fit_kwargs, :ode_kwargs) ? getfield(res.fit_kwargs, :ode_kwargs) : NamedTuple()
+        serialization = haskey(res.fit_kwargs, :serialization) ? getfield(res.fit_kwargs, :serialization) : EnsembleThreads()
+        rng = haskey(res.fit_kwargs, :rng) ? getfield(res.fit_kwargs, :rng) : Random.default_rng()
+        ll_cache = build_ll_cache(dm; ode_args=ode_args, ode_kwargs=ode_kwargs, serialization=serialization, force_saveat=true)
+        bstars = res.result.eb_modes
+        if bstars === nothing
+            bstars, batch_infos = _compute_bstars(dm, θu, constants_re, ll_cache, res.method.ebe, rng;
+                                                  rescue=res.method.ebe_rescue)
+            _, _, const_cache = _build_laplace_batch_infos(dm, constants_re)
+        else
+            _, batch_infos, const_cache = _build_laplace_batch_infos(dm, constants_re)
+        end
+        return bstars, batch_infos, θu, const_cache, ll_cache, constants_re
+    end
+    if res.result isa SAEMResult
+        θu = get_params(res; scale=:untransformed)
+        constants_re = _saem_anneal_constants_re(dm, θu, _saem_anneal_names(res), constants_re)
+        ode_args = haskey(res.fit_kwargs, :ode_args) ? getfield(res.fit_kwargs, :ode_args) : ()
+        ode_kwargs = haskey(res.fit_kwargs, :ode_kwargs) ? getfield(res.fit_kwargs, :ode_kwargs) : NamedTuple()
+        serialization = haskey(res.fit_kwargs, :serialization) ? getfield(res.fit_kwargs, :serialization) : EnsembleThreads()
+        rng = haskey(res.fit_kwargs, :rng) ? getfield(res.fit_kwargs, :rng) : Random.default_rng()
+        ll_cache = build_ll_cache(dm; ode_args=ode_args, ode_kwargs=ode_kwargs, serialization=serialization, force_saveat=true)
+        bstars = res.result.eb_modes
+        if bstars === nothing
+            _saem_opts = res.method isa _SavedFittingMethod ? SAEM().saem : res.method.saem
+            ebe = EBEOptions(_saem_opts.ebe_optimizer, _saem_opts.ebe_optim_kwargs, _saem_opts.ebe_adtype,
+                             _saem_opts.ebe_grad_tol, _saem_opts.ebe_multistart_n, _saem_opts.ebe_multistart_k,
+                             _saem_opts.ebe_multistart_max_rounds, _saem_opts.ebe_multistart_sampling)
+            bstars, batch_infos = _compute_bstars(dm, θu, constants_re, ll_cache, ebe, rng;
+                                                  rescue=_saem_opts.ebe_rescue)
+            _, _, const_cache = _build_laplace_batch_infos(dm, constants_re)
+        else
+            _, batch_infos, const_cache = _build_laplace_batch_infos(dm, constants_re)
+        end
+        return bstars, batch_infos, θu, const_cache, ll_cache, constants_re
+    end
+    error("Random-effects access not supported for this method.")
+end
+
+function _bstars_to_re_df(dm::DataModel, batch_infos, bstars_per_sample::Vector,
+                          constants_re::NamedTuple, flatten::Bool, include_constants::Bool)
+    n_samples = length(bstars_per_sample)
+    n_samples == 0 && return NamedTuple()
+    sample_dfs = Vector{NamedTuple}(undef, n_samples)
+    for s in 1:n_samples
+        sample_dfs[s] = _re_dataframes_from_bstars(dm, batch_infos, bstars_per_sample[s];
+                                                  constants_re=constants_re,
+                                                  flatten=flatten,
+                                                  include_constants=include_constants)
+    end
+    isempty(sample_dfs[1]) && return NamedTuple()
+    re_keys = keys(sample_dfs[1])
+    out_pairs = Pair{Symbol, Any}[]
+    for k in re_keys
+        df_list = DataFrame[]
+        for s in 1:n_samples
+            df = copy(sample_dfs[s][k])
+            insertcols!(df, 1, :sample => fill(s, nrow(df)))
+            push!(df_list, df)
+        end
+        push!(out_pairs, k => vcat(df_list...))
+    end
+    return NamedTuple(out_pairs)
+end
+
+# Laplace-approximation path: bstars come from the EB modes, conditional
+# covariance is (-H)^{-1}. Used for Laplace, LaplaceMAP, GHQuadrature(MAP).
+function _sample_re_laplace_path(dm::DataModel, res::FitResult, constants_re::NamedTuple,
+                                  bstars, batch_infos, θu, const_cache, ll_cache;
+                                  n_samples::Int, rng::AbstractRNG, flatten::Bool,
+                                  include_constants::Bool, jitter::Real)
+    ll_cache_local = ll_cache isa Vector ? ll_cache[1] : ll_cache
+    n_batches = length(batch_infos)
+
+    chols = Vector{Any}(undef, n_batches)
+    for (bi, info) in enumerate(batch_infos)
+        if info.n_b == 0
+            chols[bi] = nothing
+            continue
+        end
+        H = _laplace_hessian_b(dm, info, θu, bstars[bi], const_cache, ll_cache_local,
+                               nothing, bi; ctx="sample_random_effects")
+        chol, _ = _laplace_cholesky_negH(H; jitter=jitter, max_tries=8,
+                                         growth=10.0, adaptive=true,
+                                         scale_factor=1e-6)
+        (chol === nothing || chol.info != 0) &&
+            error("Failed to compute conditional covariance for batch $bi: " *
+                  "negative Hessian is not positive definite even with jitter.")
+        chols[bi] = chol
+    end
+
+    bstars_per_sample = Vector{Vector{Any}}(undef, n_samples)
+    for s in 1:n_samples
+        sampled = Vector{Any}(undef, n_batches)
+        for bi in 1:n_batches
+            info = batch_infos[bi]
+            b0 = bstars[bi]
+            if info.n_b == 0
+                sampled[bi] = b0
+                continue
+            end
+            z = randn(rng, eltype(b0), info.n_b)
+            sampled[bi] = b0 .+ (chols[bi].U \ z)
+        end
+        bstars_per_sample[s] = sampled
+    end
+    return _bstars_to_re_df(dm, batch_infos, bstars_per_sample,
+                            constants_re, flatten, include_constants)
+end
+
+# MCMC path: draw n_samples from the exact conditional p(b | y, θ̂) using
+# the same MCMC kernel that drives the E-step (Turing sampler for MCEM,
+# SaemixMH or Turing for SAEM). Each call to _mcem_sample_batch advances
+# the chain by one sweep and we record the state after every sweep.
+function _sample_re_mcmc_path(dm::DataModel, res::FitResult, constants_re::NamedTuple,
+                               bstars, batch_infos, θu, const_cache, ll_cache,
+                               sampler, base_turing_kwargs;
+                               n_samples::Int, n_adapt::Int, rng::AbstractRNG,
+                               warm_start::Bool, flatten::Bool, include_constants::Bool)
+    ll_cache_local = ll_cache isa Vector ? ll_cache[1] : ll_cache
+    re_names = get_re_names(dm.model.random.random)
+    n_batches = length(batch_infos)
+
+    # Per-sweep kwargs: 1 sample per call so we can record every step.
+    tkwargs = merge(base_turing_kwargs, (n_samples=1, n_adapt=n_adapt))
+    haskey(tkwargs, :progress) || (tkwargs = merge(tkwargs, (progress=false,)))
+    haskey(tkwargs, :verbose)  || (tkwargs = merge(tkwargs, (verbose=false,)))
+
+    # Per-batch RNGs to keep results reproducible without inter-batch correlations.
+    batch_rngs = _spawn_child_rngs(rng, n_batches)
+
+    # Seed each chain at the EB mode so samples are useful immediately.
+    last_params = Vector{Any}(undef, n_batches)
+    for bi in 1:n_batches
+        info = batch_infos[bi]
+        last_params[bi] = info.n_b == 0 ? nothing :
+            _b_to_last_params(bstars[bi], info, re_names)
+    end
+
+    bstars_per_sample = Vector{Vector{Any}}(undef, n_samples)
+    for s in 1:n_samples
+        sampled = Vector{Any}(undef, n_batches)
+        # Only the first sweep performs adaptation; subsequent sweeps reuse the chain.
+        sweep_kwargs = s == 1 ? tkwargs : merge(tkwargs, (n_adapt=0,))
+        for bi in 1:n_batches
+            info = batch_infos[bi]
+            if info.n_b == 0
+                sampled[bi] = bstars[bi]
+                continue
+            end
+            samples_mat, lastp, lastb = _mcem_sample_batch(
+                dm, info, θu, const_cache, ll_cache_local, sampler, sweep_kwargs,
+                batch_rngs[bi], re_names, warm_start, last_params[bi])
+            last_params[bi] = lastp
+            sampled[bi] = size(samples_mat, 2) > 0 ? vec(samples_mat[:, end]) : copy(lastb)
+        end
+        bstars_per_sample[s] = sampled
+    end
+    return _bstars_to_re_df(dm, batch_infos, bstars_per_sample,
+                            constants_re, flatten, include_constants)
+end
+
+"""
+    sample_random_effects(dm::DataModel, res::FitResult; n_samples, rng,
+                          constants_re, flatten, include_constants,
+                          jitter, n_adapt, warm_start) -> NamedTuple
+    sample_random_effects(res::FitResult; ...) -> NamedTuple
+
+Draw samples from the conditional posterior of the random effects
+``p(b_i \\mid y_i, \\hat{\\theta})`` for each individual.
+
+The sampling mechanism matches the one the fitting method itself uses for the
+conditional distribution, so the draws are consistent with the E-step:
+
+- `Laplace`, `LaplaceMAP`, `GHQuadrature`, `GHQuadratureMAP`: Gaussian Laplace
+  approximation centred at the EBE mode ``b^\\star`` with covariance
+  ``(-H)^{-1}``, where ``H`` is the Hessian of the joint log-density at ``b^\\star``.
+- `MCEM`, `SAEM`: MCMC samples drawn from the exact conditional with the same
+  sampler used in the E-step (Turing sampler for MCEM, `SaemixMH` or Turing
+  sampler for SAEM), seeded at the EBE mode.
+
+For batched random effects (e.g. blockwise MCEM/SAEM), the batch is sampled
+jointly and split per individual.
+
+# Keyword Arguments
+- `n_samples::Int = 100`: number of conditional posterior draws per individual.
+- `rng::AbstractRNG = Random.default_rng()`: random source for the draws.
+- `constants_re::NamedTuple = NamedTuple()`: fix random effects at given values.
+- `flatten::Bool = true`: expand vector random effects to individual columns.
+- `include_constants::Bool = true`: include constant random effects in the output.
+- `jitter::Real = 1e-8`: initial Cholesky jitter (Laplace path only).
+- `n_adapt::Int = 200`: MCMC adaptation steps for the first sweep (MCMC path only).
+- `warm_start::Bool = true`: seed the MCMC chain at the EB mode (MCMC path only).
+- `sampler = nothing`: override the MCMC sampler used for MCEM/SAEM. Defaults to
+  the sampler stored on the fit method, or to `SaemixMH()` when the result was
+  loaded from disk (where the original sampler is not serialised).
+- `turing_kwargs::NamedTuple = NamedTuple()`: extra kwargs passed through to the
+  MCMC sampler. Merged on top of the method's stored `turing_kwargs` when those
+  are available.
+
+The returned `NamedTuple` mirrors [`get_random_effects`](@ref), with one extra
+leading `:sample` integer column (1..`n_samples`) so each individual appears
+`n_samples` times per `DataFrame`.
+"""
+function sample_random_effects(dm::DataModel,
+                               res::FitResult;
+                               n_samples::Int=100,
+                               rng::AbstractRNG=Random.default_rng(),
+                               constants_re::NamedTuple=NamedTuple(),
+                               flatten::Bool=true,
+                               include_constants::Bool=true,
+                               jitter::Real=1e-8,
+                               n_adapt::Int=200,
+                               warm_start::Bool=true,
+                               sampler=nothing,
+                               turing_kwargs::NamedTuple=NamedTuple())
+    n_samples >= 1 || error("n_samples must be >= 1.")
+    constants_re = _res_constants_re(res, constants_re)
+
+    bstars, batch_infos, θu, const_cache, ll_cache, constants_re =
+        _resolve_bstars_for_re(dm, res, constants_re)
+    isempty(batch_infos) && return NamedTuple()
+
+    if res.result isa LaplaceResult || res.result isa LaplaceMAPResult ||
+       res.result isa GHQuadratureResult || res.result isa GHQuadratureMAPResult
+        return _sample_re_laplace_path(dm, res, constants_re,
+                                       bstars, batch_infos, θu, const_cache, ll_cache;
+                                       n_samples=n_samples, rng=rng,
+                                       flatten=flatten,
+                                       include_constants=include_constants,
+                                       jitter=jitter)
+    end
+
+    # MCMC path for MCEM / SAEM. Prefer the sampler stored on the method;
+    # fall back to SaemixMH() when the result was loaded from disk or the
+    # method has no usable MCMC sampler (e.g. pure-IS MCEM).
+    method_sampler, method_tkwargs = if res.method isa _SavedFittingMethod
+        (nothing, NamedTuple())
+    elseif res.result isa MCEMResult
+        es = _mcmc_e_step(res.method.e_step)
+        es === nothing ? (nothing, NamedTuple()) : (es.sampler, es.turing_kwargs)
+    elseif res.result isa SAEMResult
+        (res.method.saem.sampler, res.method.saem.turing_kwargs)
+    else
+        error("Random-effects sampling not supported for this method.")
+    end
+
+    final_sampler = sampler !== nothing ? sampler :
+                    (method_sampler !== nothing ? method_sampler : SaemixMH())
+    base_tkwargs = merge(method_tkwargs, turing_kwargs)
+
+    return _sample_re_mcmc_path(dm, res, constants_re,
+                                 bstars, batch_infos, θu, const_cache, ll_cache,
+                                 final_sampler, base_tkwargs;
+                                 n_samples=n_samples, n_adapt=n_adapt, rng=rng,
+                                 warm_start=warm_start, flatten=flatten,
+                                 include_constants=include_constants)
+end
+
+function sample_random_effects(res::FitResult;
+                               n_samples::Int=100,
+                               rng::AbstractRNG=Random.default_rng(),
+                               constants_re::NamedTuple=NamedTuple(),
+                               flatten::Bool=true,
+                               include_constants::Bool=true,
+                               jitter::Real=1e-8,
+                               n_adapt::Int=200,
+                               warm_start::Bool=true,
+                               sampler=nothing,
+                               turing_kwargs::NamedTuple=NamedTuple())
+    dm = res.data_model
+    dm === nothing && error("This fit result does not store a DataModel; call sample_random_effects(dm, res) instead.")
+    return sample_random_effects(dm, res; n_samples=n_samples, rng=rng,
+                                 constants_re=constants_re, flatten=flatten,
+                                 include_constants=include_constants,
+                                 jitter=jitter, n_adapt=n_adapt, warm_start=warm_start,
+                                 sampler=sampler, turing_kwargs=turing_kwargs)
+end
+
+"""
+    reestimate_ebes(dm::DataModel, res::FitResult; kwargs...) -> FitResult
+    reestimate_ebes(res::FitResult; kwargs...) -> FitResult
+
+Re-estimate empirical Bayes estimates (EBEs) from a fitted model, ignoring any EBEs
+stored in the result. Returns a new `FitResult` with `eb_modes` replaced by the
+freshly-optimised modes. Use `get_random_effects` on the returned result to obtain the
+corresponding `NamedTuple` of `DataFrame`s.
+
+Supported methods: `Laplace`, `LaplaceMAP`, `MCEM`, `SAEM`.
+
+# Keyword Arguments
+- `ebe_optimizer`: inner optimiser for EBE mode-finding (default: `LBFGS` with backtracking).
+- `ebe_optim_kwargs::NamedTuple`: extra kwargs forwarded to `Optimization.solve`.
+- `ebe_adtype`: automatic differentiation type (default: `AutoForwardDiff()`).
+- `ebe_grad_tol`: gradient convergence tolerance (default: `:auto`).
+- `ebe_multistart_n::Int`: number of multistart candidates (default: `50`).
+- `ebe_multistart_k::Int`: k-means clusters for multistart initialisation (default: `1`).
+- `ebe_multistart_max_rounds::Int`: maximum multistart refinement rounds (default: `5`).
+- `ebe_multistart_sampling::Symbol`: candidate sampling strategy — `:lhs`, `:random`, or `:mcmc`
+  (default: `:lhs`). With `:mcmc`, `ebe_multistart_n` conditional posterior samples are drawn
+  via MCMC and used as starting points; `ebe_mcmc_sampler` and `ebe_mcmc_n_adapt` control
+  the sampler and burn-in length.
+- `ebe_mcmc_sampler`: MCMC sampler for conditional posterior sampling (default: `SaemixMH()`).
+  Only used when `ebe_multistart_sampling=:mcmc`.
+- `ebe_mcmc_n_adapt::Int`: number of MCMC burn-in steps before collecting candidates
+  (default: `50`). Only used when `ebe_multistart_sampling=:mcmc`.
+- `ebe_rescue_on_high_grad::Bool`: run a rescue pass (LHS) when any EBE mode has a high
+  gradient norm (default: `false`).
+- `ebe_rescue_multistart_n::Int`: multistart candidates for the rescue pass (default: `128`).
+- `ebe_rescue_multistart_k::Int`: k-means clusters for rescue (default: `32`).
+- `ebe_rescue_max_rounds::Int`: refinement rounds for rescue (default: `8`).
+- `ebe_rescue_grad_tol`: gradient tolerance for the rescue pass (default: matches `ebe_grad_tol`).
+- `ebe_rescue_multistart_sampling::Symbol`: sampling for rescue (default: `:lhs`).
+- `constants_re::NamedTuple`: fix specific RE levels at given values (natural scale).
+- `individuals`: `nothing` (all) or a vector of primary IDs. When provided, only batches
+  containing at least one listed individual are re-optimised; the remaining batches retain
+  the `eb_modes` already stored in `res`. Co-batch individuals are always re-optimised.
+- `ode_args::Tuple`, `ode_kwargs::NamedTuple`: forwarded to the ODE solver.
+- `rng::AbstractRNG`: random number generator.
+- `progress::Bool`: show progress bar (default: `false`).
+"""
+function reestimate_ebes(dm::DataModel,
+                         res::FitResult;
+                         ebe_optimizer=OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracking(maxstep=1.0)),
+                         ebe_optim_kwargs::NamedTuple=NamedTuple(),
+                         ebe_adtype=Optimization.AutoForwardDiff(),
+                         ebe_grad_tol=:auto,
+                         ebe_multistart_n::Int=50,
+                         ebe_multistart_k::Int=1,
+                         ebe_multistart_max_rounds::Int=5,
+                         ebe_multistart_sampling::Symbol=:lhs,
+                         ebe_mcmc_sampler=SaemixMH(),
+                         ebe_mcmc_n_adapt::Int=50,
+                         ebe_rescue_on_high_grad::Bool=false,
+                         ebe_rescue_multistart_n::Int=128,
+                         ebe_rescue_multistart_k::Int=32,
+                         ebe_rescue_max_rounds::Int=8,
+                         ebe_rescue_grad_tol=ebe_grad_tol,
+                         ebe_rescue_multistart_sampling::Symbol=:lhs,
+                         constants_re::NamedTuple=NamedTuple(),
+                         individuals=nothing,
+                         ode_args::Tuple=(),
+                         ode_kwargs::NamedTuple=NamedTuple(),
+                         rng::AbstractRNG=Random.default_rng(),
+                         progress::Bool=false)
+    supported = res.result isa LaplaceResult || res.result isa LaplaceMAPResult ||
+                res.result isa MCEMResult || res.result isa SAEMResult
+    supported || error("reestimate_ebes is not supported for this fitting method.")
+    sampling_sym = ebe_multistart_sampling == :mcmc ? :lhs : ebe_multistart_sampling
+    ebe = EBEOptions(ebe_optimizer, ebe_optim_kwargs, ebe_adtype, ebe_grad_tol,
+                     ebe_multistart_n, ebe_multistart_k, ebe_multistart_max_rounds,
+                     sampling_sym)
+    ebe_rescue = EBERescueOptions(ebe_rescue_on_high_grad, ebe_rescue_multistart_n,
+                                  ebe_rescue_multistart_k, ebe_rescue_max_rounds,
+                                  ebe_rescue_grad_tol, ebe_rescue_multistart_sampling)
+    θu = get_params(res; scale=:untransformed)
+    constants_re = _res_constants_re(res, constants_re)
+    if res.result isa SAEMResult
+        constants_re = _saem_anneal_constants_re(dm, θu, _saem_anneal_names(res), constants_re)
+    end
+    ll_cache = build_ll_cache(dm; ode_args=ode_args, ode_kwargs=ode_kwargs, force_saveat=true)
+    # Compute batch structure once; derive active batch set if individuals are specified.
+    _, batch_infos_pre, const_cache_pre = _build_laplace_batch_infos(dm, constants_re)
+    active_batch_indices = if individuals !== nothing
+        ind_indices = Set(dm.id_index[id] for id in individuals if haskey(dm.id_index, id))
+        findall(bi -> any(i ∈ ind_indices for i in batch_infos_pre[bi].inds),
+                eachindex(batch_infos_pre))
+    else
+        nothing
+    end
+    mcmc_candidates = nothing
+    if ebe_multistart_sampling == :mcmc
+        mcmc_candidates = _compute_mcmc_candidates(dm, batch_infos_pre, const_cache_pre, θu,
+                                                   ll_cache, ebe_mcmc_sampler,
+                                                   ebe_multistart_n, ebe_mcmc_n_adapt, rng,
+                                                   active_batch_indices)
+    end
+    bstars, batch_infos = _compute_bstars(dm, θu, constants_re, ll_cache, ebe, rng;
+                                          rescue=ebe_rescue, progress=progress,
+                                          mcmc_candidates_by_batch=mcmc_candidates,
+                                          active_batch_indices=active_batch_indices)
+    new_eb_modes = if individuals !== nothing
+        existing = res.result.eb_modes
+        if existing !== nothing && length(existing) == length(bstars)
+            active_set = Set(active_batch_indices)
+            merged = copy(existing)
+            for bi in active_set
+                merged[bi] = bstars[bi]
+            end
+            merged
+        else
+            bstars
+        end
+    else
+        bstars
+    end
+    return _with_result(res, _with_eb_modes(res.result, new_eb_modes))
+end
+
+function reestimate_ebes(res::FitResult; kwargs...)
+    dm = res.data_model
+    dm === nothing && error("This fit result does not store a DataModel; call reestimate_ebes(dm, res) instead.")
+    return reestimate_ebes(dm, res; kwargs...)
+end
+
+function _with_result(res::FitResult, new_result)
+    return FitResult(res.method, new_result, res.summary, res.diagnostics,
+                     res.data_model, res.fit_args, res.fit_kwargs)
+end
+
 """
     get_loglikelihood(dm::DataModel, res::FitResult; constants_re, ode_args,
                       ode_kwargs, serialization) -> Real
@@ -797,26 +1254,26 @@ end
 
 Compute the marginal log-likelihood at the estimated parameter values.
 
-For MLE/MAP results, evaluates the population log-likelihood. For Laplace/FOCEI
+For MLE/MAP results, evaluates the population log-likelihood. For Laplace-style
 results, evaluates using the EB modes stored in the result.
 
 # Keyword Arguments
 - `constants_re::NamedTuple = NamedTuple()`: random effects fixed at given values.
 - `ode_args::Tuple = ()`: additional positional arguments for the ODE solver.
 - `ode_kwargs::NamedTuple = NamedTuple()`: additional keyword arguments for the ODE solver.
-- `serialization = EnsembleSerial()`: parallelisation strategy.
+- `serialization = EnsembleThreads()`: parallelisation strategy.
 """
 function get_loglikelihood(dm::DataModel,
                            res::FitResult;
                            constants_re::NamedTuple=NamedTuple(),
                            ode_args::Tuple=(),
                            ode_kwargs::NamedTuple=NamedTuple(),
-                           serialization::SciMLBase.EnsembleAlgorithm=EnsembleSerial())
+                           serialization::SciMLBase.EnsembleAlgorithm=EnsembleThreads())
     constants_re = _res_constants_re(res, constants_re)
     θu = get_params(res; scale=:untransformed)
     if res.result isa MLEResult || res.result isa MAPResult
         return loglikelihood(dm, θu, ComponentArray(); ode_args=ode_args, ode_kwargs=ode_kwargs, serialization=serialization)
-    elseif res.result isa LaplaceResult || res.result isa LaplaceMAPResult || res.result isa FOCEIResult || res.result isa FOCEIMAPResult || res.result isa GHQuadratureMAPResult
+    elseif res.result isa LaplaceResult || res.result isa LaplaceMAPResult || res.result isa GHQuadratureMAPResult
         pairing, batch_infos, const_cache = _build_laplace_batch_infos(dm, constants_re)
         bstars = res.result.eb_modes
         length(bstars) == length(batch_infos) || error("Laplace-style EB modes do not match number of batches.")
@@ -844,7 +1301,7 @@ function get_loglikelihood(res::FitResult;
                            constants_re::NamedTuple=NamedTuple(),
                            ode_args::Tuple=(),
                            ode_kwargs::NamedTuple=NamedTuple(),
-                           serialization::SciMLBase.EnsembleAlgorithm=EnsembleSerial())
+                           serialization::SciMLBase.EnsembleAlgorithm=EnsembleThreads())
     dm = res.data_model
     dm === nothing && error("This fit result does not store a DataModel; call get_loglikelihood(dm, res) instead.")
     return get_loglikelihood(dm, res; constants_re=constants_re, ode_args=ode_args, ode_kwargs=ode_kwargs, serialization=serialization)
@@ -871,7 +1328,7 @@ end
 Compute the marginal log-likelihood using **Adaptive Gauss-Hermite Quadrature** (AGHQ),
 with optional Monte Carlo sampling as the primary method or as a fallback.
 
-Unlike `get_loglikelihood`, which plugs in the EBE point estimate for Laplace/FOCEI/SAEM/MCEM
+Unlike `get_loglikelihood`, which plugs in the EBE point estimate for Laplace/SAEM/MCEM
 methods, this function integrates over each batch's random effects.
 
 The integration measure for AGHQ is
@@ -886,7 +1343,7 @@ the Hessian H of log p(b | y, θ) at b*. The log-correction
 accounts for the prior, Jacobian, and Gaussian quadrature measure.
 
 # Supported methods
-Laplace, LaplaceMAP, FOCEI, FOCEIMAP, SAEM, MCEM, GHQuadrature, GHQuadratureMAP.
+Laplace, LaplaceMAP, SAEM, MCEM, GHQuadrature, GHQuadratureMAP.
 
 # Not supported
 - **MCMC**: raises an error.
@@ -897,7 +1354,7 @@ Laplace, LaplaceMAP, FOCEI, FOCEIMAP, SAEM, MCEM, GHQuadrature, GHQuadratureMAP.
 - `level`: Smolyak accuracy level (default 3). Same as in `GHQuadrature`.
 - `constants_re`: fixes specific RE levels on the natural scale.
 - `ode_args`, `ode_kwargs`: forwarded to the ODE solver.
-- `serialization`: `EnsembleSerial()` (default) or `EnsembleThreads()`.
+- `serialization`: `EnsembleThreads()` (default) or `EnsembleSerial()`.
 - `ebe_options::Union{Nothing, EBEOptions}`: EBE optimizer options used when stored
   modes are unavailable. `nothing` uses the same defaults as `Laplace()`.
 - `rng`: random number generator for EBE multistart (if needed).
@@ -915,7 +1372,7 @@ function get_loglikelihood_quadrature(dm::DataModel,
                                        constants_re::NamedTuple=NamedTuple(),
                                        ode_args::Tuple=(),
                                        ode_kwargs::NamedTuple=NamedTuple(),
-                                       serialization::SciMLBase.EnsembleAlgorithm=EnsembleSerial(),
+                                       serialization::SciMLBase.EnsembleAlgorithm=EnsembleThreads(),
                                        ebe_options::Union{Nothing, EBEOptions}=nothing,
                                        seed::Int=0,
                                        rng::AbstractRNG=Random.Xoshiro(seed),
@@ -932,7 +1389,17 @@ function get_loglikelihood_quadrature(dm::DataModel,
 
     constants_re = _res_constants_re(res, constants_re)
     θu = get_params(res; scale=:untransformed)
+    # Upcast to Float64 if needed (SAEM stores Float32; Hessian computation requires Float64)
+    θu = eltype(θu) === Float64 ? θu : ComponentArray(Float64.(θu), getaxes(θu))
     θu_re = _symmetrize_psd_params(θu, dm.model.fixed.fixed)
+    # For SAEM with anneal_to_fixed, rebuild the annealed constants_re from the final θ
+    # so that _build_laplace_batch_infos sees the correct n_b (matching stored eb_modes).
+    if res.result isa SAEMResult &&
+            hasproperty(res.result.notes, :anneal_to_fixed) &&
+            !isempty(res.result.notes.anneal_to_fixed)
+        constants_re = _saem_anneal_constants_re(dm, θu_re, res.result.notes.anneal_to_fixed,
+                                                 constants_re)
+    end
 
     _, batch_infos, const_cache = _build_laplace_batch_infos(dm, constants_re)
     ll_cache = build_ll_cache(dm; ode_args=ode_args, ode_kwargs=ode_kwargs, force_saveat=true)
@@ -1005,7 +1472,7 @@ function get_loglikelihood_quadrature(res::FitResult;
                                        constants_re::NamedTuple=NamedTuple(),
                                        ode_args::Tuple=(),
                                        ode_kwargs::NamedTuple=NamedTuple(),
-                                       serialization::SciMLBase.EnsembleAlgorithm=EnsembleSerial(),
+                                       serialization::SciMLBase.EnsembleAlgorithm=EnsembleThreads(),
                                        ebe_options::Union{Nothing, EBEOptions}=nothing,
                                        seed::Int=0,
                                        rng::AbstractRNG=Random.Xoshiro(seed),
@@ -1045,7 +1512,7 @@ Fit a model to data using the specified estimation method.
   natural scale (not available for MCMC).
 - `ode_args::Tuple = ()`: extra positional arguments forwarded to the ODE solver.
 - `ode_kwargs::NamedTuple = NamedTuple()`: extra keyword arguments forwarded to the ODE solver.
-- `serialization = EnsembleSerial()`: parallelisation strategy.
+- `serialization = EnsembleThreads()`: parallelisation strategy.
 - `rng = Random.default_rng()`: random number generator (used by MCMC/SAEM/MCEM).
 - `theta_0_untransformed::Union{Nothing, ComponentArray} = nothing`: custom starting
   point on the natural scale; defaults to the model's declared initial values.
@@ -1228,7 +1695,8 @@ function _loglikelihood_individual(dm::DataModel, idx::Int, θ, η_ind, cache::_
             dist = getproperty(obs, col)
             if dist isa ContinuousTimeDiscreteStatesHMM || dist isa DiscreteTimeDiscreteStatesHMM ||
                dist isa MVContinuousTimeDiscreteStatesHMM || dist isa MVDiscreteTimeDiscreteStatesHMM ||
-               dist isa DiscreteTimeObservedStatesMarkovModel || dist isa ContinuousTimeObservedStatesMarkovModel
+               dist isa DiscreteTimeObservedStatesMarkovModel || dist isa ContinuousTimeObservedStatesMarkovModel ||
+               dist isa CoarsedObservedStatesMarkovModel
                 if hmm_seen === nothing
                     hmm_init = Vector{Vector{T_hmm}}(undef, length(obs_cols))
                     hmm_seen = falses(length(obs_cols))
@@ -1236,8 +1704,10 @@ function _loglikelihood_individual(dm::DataModel, idx::Int, θ, η_ind, cache::_
                 hs = hmm_seen::BitVector
                 hi = hmm_init::Vector{Vector{T_hmm}}
                 if !hs[j]
-                    buf = Vector{T_hmm}(undef, length(dist.initial_dist.p))
-                    copyto!(buf, dist.initial_dist.p)
+                    init_probs = dist isa CoarsedObservedStatesMarkovModel ?
+                                 dist.base_dist.initial_dist.p : dist.initial_dist.p
+                    buf = Vector{T_hmm}(undef, length(init_probs))
+                    copyto!(buf, init_probs)
                     hi[j] = buf
                     hs[j] = true
                 end
@@ -1265,6 +1735,24 @@ function _loglikelihood_individual(dm::DataModel, idx::Int, θ, η_ind, cache::_
                                                             Distributions.Categorical(init_p; check_args=false),
                                                             dist.Δt, dist.state_labels;
                                                             propagation_mode=dist.propagation_mode)
+                elseif dist isa CoarsedObservedStatesMarkovModel &&
+                       dist.base_dist isa DiscreteTimeObservedStatesMarkovModel
+                    base_dist = dist.base_dist
+                    coarsed(DiscreteTimeObservedStatesMarkovModel(
+                        base_dist.transition_matrix,
+                        Distributions.Categorical(init_p; check_args=false),
+                        base_dist.state_labels
+                    ))
+                elseif dist isa CoarsedObservedStatesMarkovModel &&
+                       dist.base_dist isa ContinuousTimeObservedStatesMarkovModel
+                    base_dist = dist.base_dist
+                    coarsed(ContinuousTimeObservedStatesMarkovModel(
+                        base_dist.transition_matrix,
+                        Distributions.Categorical(init_p; check_args=false),
+                        base_dist.Δt,
+                        base_dist.state_labels;
+                        propagation_mode=base_dist.propagation_mode
+                    ))
                 else
                     DiscreteTimeDiscreteStatesHMM(dist.transition_matrix, dist.emission_dists,
                                                   Distributions.Categorical(init_p; check_args=false))
@@ -1641,7 +2129,7 @@ end
 function loglikelihood(dm::DataModel, θ::ComponentArray, η;
                        ode_args::Tuple=(),
                        ode_kwargs::NamedTuple=NamedTuple(),
-                       serialization::SciMLBase.EnsembleAlgorithm=EnsembleSerial(),
+                       serialization::SciMLBase.EnsembleAlgorithm=EnsembleThreads(),
                        cache=nothing)
     θ = _symmetrize_psd_params(θ, dm.model.fixed.fixed)
     if cache === nothing
@@ -1660,7 +2148,8 @@ function loglikelihood(dm::DataModel, θ::ComponentArray, η;
             built = build_ll_cache(dm; ode_args=ode_args, ode_kwargs=ode_kwargs, nthreads=nthreads)
             built isa Vector ? built : [built]
         end
-        T = eltype(θ)
+        η_eltype = η isa Vector ? (isempty(η) ? Float64 : eltype(first(η))) : eltype(η)
+        T = promote_type(eltype(θ), η_eltype)
         by_individual = Vector{T}(undef, n)
         bad = Threads.Atomic{Bool}(false)
         Threads.@threads for i in 1:n
@@ -1774,4 +2263,63 @@ function _log_closed_form_plan(method_name::String,
         @info "$(method_name): closed-form M-step active. Numerically optimized parameters: $(numeric_params)"
     end
     return nothing
+end
+
+"""
+    _compute_obs_fe_syms(model) -> Set{Symbol}
+
+Return the set of fixed-effect names that appear in any observation-side block:
+`@formulas`, `@preDifferentialEquation`, `@DifferentialEquation`, or `@initialDE`.
+
+A fixed-effect name NOT in this set appears only in `@randomEffects` distribution
+expressions and therefore belongs entirely to Q2 (the RE-distribution term of the
+complete-data log-likelihood), enabling a cheaper M-step that skips ODE evaluation.
+"""
+function _compute_obs_fe_syms(model)
+    fe_names = Set(get_names(model.fixed.fixed))
+    syms = Set{Symbol}()
+    # @formulas — FormulasIR.var_syms contains all variable symbols
+    union!(syms, filter(∈(fe_names), model.formulas.formulas.ir.var_syms))
+    de = model.de
+    if de !== nothing
+        # @preDifferentialEquation
+        if de.prede !== nothing
+            union!(syms, filter(∈(fe_names), de.prede.meta.syms))
+        end
+        # @DifferentialEquation — var_syms are non-state/signal variable references,
+        # fun_syms are function-call heads (e.g. model functions used in RHS)
+        if de.de !== nothing
+            union!(syms, filter(∈(fe_names), de.de.meta.var_syms))
+            union!(syms, filter(∈(fe_names), de.de.meta.fun_syms))
+        end
+        # @initialDE
+        if de.initial !== nothing
+            union!(syms, filter(∈(fe_names), de.initial.ir.var_syms))
+            union!(syms, filter(∈(fe_names), de.initial.ir.prop_syms))
+        end
+    end
+    return syms
+end
+
+"""
+    _partition_q1_q2_names(model, free_names) -> (q1=Vector{Symbol}, q2=Vector{Symbol})
+
+Partition `free_names` into Q1 parameters (appear in obs-side blocks, require ODE
+evaluation) and Q2 parameters (appear only in `@randomEffects` distribution expressions,
+no ODE required).
+
+Returns a NamedTuple `(q1=..., q2=...)` preserving the original order of `free_names`.
+"""
+function _partition_q1_q2_names(model, free_names::Vector{Symbol})
+    obs_fe = _compute_obs_fe_syms(model)
+    re_syms_map = get_re_syms(model.random.random)
+    re_fe_syms = Set{Symbol}()
+    for (_, syms) in Base.pairs(re_syms_map)
+        union!(re_fe_syms, syms)
+    end
+    # Q2 candidates: in RE distribution expressions but not in any obs-side block
+    q2_candidates = setdiff(re_fe_syms, obs_fe)
+    q2_free = [n for n in free_names if n ∈ q2_candidates]
+    q1_free = [n for n in free_names if n ∉ q2_candidates]
+    return (q1=q1_free, q2=q2_free)
 end

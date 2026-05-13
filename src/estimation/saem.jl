@@ -294,10 +294,10 @@ function _saem_batches!(buf::Vector{Int}, update_schedule, nbatches::Int, iter::
         Random.randperm!(rng, buf)
         resize!(buf, m)
         return buf
-    elseif update_schedule isa Function
+    elseif hasmethod(update_schedule, Tuple{Int, Int, AbstractRNG})
         return update_schedule(nbatches, iter, rng)
     else
-        error("Invalid update_schedule. Use :all, Int minibatch size, or a function (nbatches, iter, rng) -> Vector{Int}.")
+        error("Invalid update_schedule. Use :all, Int minibatch size, or a callable (nbatches, iter, rng) -> Vector{Int}.")
     end
 end
 
@@ -331,7 +331,13 @@ or closed-form updates (when `builtin_stats` is enabled).
   no Turing overhead). Pass `MH()` or `AdaptiveNoLimitsMH()` for Turing-based samplers.
 - `turing_kwargs::NamedTuple = NamedTuple()`: keyword arguments for `Turing.sample` (only
   used by Turing-based samplers; ignored by `SaemixMH`).
-- `update_schedule`: which parameters to update per iteration (`:all` or a `Vector{Symbol}`).
+- `update_schedule`: which batches to update per SAEM iteration. Options:
+  - `:all` (default) — update all batches every iteration.
+  - `Int` — random minibatch of that size, sampled without replacement each iteration.
+  - Any callable with signature `(nbatches::Int, iter::Int, rng) -> Vector{Int}` — returns
+    the indices of batches to update. Can be a plain function or a callable struct (a
+    mutable struct with a matching `call` method, useful for stateful schedules).
+    Example: a struct that cycles through all batches in successive windows of 100.
 - `warm_start::Bool = true`: initialise the sampler from the previous iteration's modes.
 - `verbose::Bool = false`: print per-iteration diagnostics.
 - `progress::Bool = true`: show a progress bar.
@@ -366,9 +372,10 @@ or closed-form updates (when `builtin_stats` is enabled).
 - `re_cov_params::NamedTuple = NamedTuple()`: mapping of RE name to covariance parameter.
 - `re_mean_params::NamedTuple = NamedTuple()`: mapping of RE name to mean parameter.
 - `ebe_optimizer`, `ebe_optim_kwargs`, `ebe_adtype`, `ebe_grad_tol`: EBE inner optimiser.
-- `ebe_multistart_n`, `ebe_multistart_k`, `ebe_multistart_max_rounds`,
+- `ebe_multistart_n`, `ebe_multistart_k` (default 1), `ebe_multistart_max_rounds`,
   `ebe_multistart_sampling`: multistart settings for EBE mode computation.
-- `ebe_rescue_*`: rescue multistart settings when an EBE mode has a high gradient norm.
+- `ebe_rescue_on_high_grad` (default `false`), `ebe_rescue_*`: rescue multistart settings
+  when an EBE mode has a high gradient norm. Disabled by default.
 - `lb`, `ub`: bounds on the transformed fixed-effect scale, or `nothing`.
 - `mstep_sa_on_params::Bool = true`: if `true`, the numerical M-step uses only the
   current iteration's random-effect samples (not the ring buffer) as the objective,
@@ -423,15 +430,15 @@ SAEM(; optimizer=OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracking(
      resid_var_param=:σ,
      re_cov_params=NamedTuple(),
      re_mean_params=NamedTuple(),
-     ebe_optimizer=OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracking(maxstep=1.0)),
+     ebe_optimizer=OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracking()),
      ebe_optim_kwargs=NamedTuple(),
      ebe_adtype=Optimization.AutoForwardDiff(),
      ebe_grad_tol=:auto,
      ebe_multistart_n=50,
-     ebe_multistart_k=10,
+     ebe_multistart_k=1,
      ebe_multistart_max_rounds=5,
      ebe_multistart_sampling=:lhs,
-     ebe_rescue_on_high_grad=true,
+     ebe_rescue_on_high_grad=false,
      ebe_rescue_multistart_n=128,
      ebe_rescue_multistart_k=32,
      ebe_rescue_max_rounds=8,
@@ -449,7 +456,7 @@ SAEM(; optimizer=OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracking(
      sa_phase2_kappa::Float64=-1.0,
      sa_schedule_fn=nothing,
      n_chains::Int=1,
-     auto_small_n_chains::Bool=false,
+     auto_small_n_chains::Bool=true,
      small_n_chain_target::Int=50,
      sa_anneal_targets::NamedTuple=NamedTuple(),
      sa_anneal_schedule::Symbol=:exponential,
@@ -687,7 +694,7 @@ function _saem_build_var_lb_target_set(re_cov_params::NamedTuple, re_family_map:
     for re_name in keys(re_cov_params)
         haskey(re_family_map, re_name) || continue
         family = getproperty(re_family_map, re_name)
-        family in (:normal, :lognormal, :mvnormal) || continue
+        family in (:normal, :lognormal, :mvnormal, :mvlognormal, :mvlogitnormal) || continue
         cov_sym = getproperty(re_cov_params, re_name)
         cov_sym isa Symbol || continue
         hasproperty(θ0_u, cov_sym) || continue
@@ -989,6 +996,52 @@ function _saem_parse_re_gaussian_mapping(dist_expr, fixed_set::Set{Symbol})
         return (family=:mvnormal, mean=mean_target, cov=cov_target)
     end
 
+    if cname == :MvLogNormal || cname == :MvLogitNormal
+        (dist_expr isa Expr && length(dist_expr.args) == 3) || return nothing
+        μarg = dist_expr.args[2]
+        Σarg = dist_expr.args[3]
+
+        mean_target = nothing
+        if μarg isa Symbol
+            μarg in fixed_set && (mean_target = μarg)
+        else
+            μ_tuple = _saem_symbol_tuple_from_vector_expr(μarg)
+            if μ_tuple !== nothing
+                all(s -> s in fixed_set, μ_tuple) && (mean_target = μ_tuple)
+            elseif _saem_number_vector_expr(μarg)
+                mean_target = nothing
+            end
+        end
+
+        cov_target = nothing
+        if Σarg isa Symbol
+            Σarg in fixed_set && (cov_target = Σarg)
+        else
+            cname_cov = _saem_call_name(Σarg)
+            if cname_cov == :Diagonal && Σarg isa Expr && length(Σarg.args) == 2
+                darg = Σarg.args[2]
+                if darg isa Symbol
+                    darg in fixed_set && (cov_target = darg)
+                else
+                    d_tuple = _saem_symbol_tuple_from_vector_expr(darg)
+                    if d_tuple !== nothing
+                        all(s -> s in fixed_set, d_tuple) && (cov_target = d_tuple)
+                    end
+                end
+            end
+        end
+        fam = cname == :MvLogNormal ? :mvlognormal : :mvlogitnormal
+        return (family=fam, mean=mean_target, cov=cov_target)
+    end
+
+    return nothing
+end
+
+@inline function _saem_censored_inner_dist_expr(ex::Expr)
+    for arg in @view ex.args[2:end]
+        arg isa Expr && arg.head in (:parameters, :kw) && continue
+        return arg
+    end
     return nothing
 end
 
@@ -996,6 +1049,12 @@ function _saem_parse_outcome_builtin_target(dist_expr, fixed_set::Set{Symbol})
     cname = _saem_call_name(dist_expr)
     cname === nothing && return nothing
     dist_expr isa Expr || return nothing
+
+    if cname == :censored
+        inner = _saem_censored_inner_dist_expr(dist_expr)
+        inner === nothing && return nothing
+        return _saem_parse_outcome_builtin_target(inner, fixed_set)
+    end
 
     if cname == :Normal
         length(dist_expr.args) == 3 || return nothing
@@ -1210,6 +1269,10 @@ function _saem_re_family_map(dm::DataModel)
                 family = :normal
             elseif cname == :MvNormal
                 family = :mvnormal
+            elseif cname == :MvLogNormal
+                family = :mvlognormal
+            elseif cname == :MvLogitNormal
+                family = :mvlogitnormal
             elseif cname == :LogNormal
                 family = :lognormal
             elseif cname == :Exponential
@@ -1264,20 +1327,34 @@ end
 end
 
 @inline function _saem_outcome_family(dist)
-    if dist isa Normal
+    d = dist isa Distributions.Censored ? dist.uncensored : dist
+    if d isa Normal
         return :normal
-    elseif dist isa LogNormal
+    elseif d isa LogNormal
         return :lognormal
-    elseif dist isa Exponential
+    elseif d isa Exponential
         return :exponential
-    elseif dist isa Bernoulli
+    elseif d isa Bernoulli
         return :bernoulli
-    elseif dist isa Poisson
+    elseif d isa Poisson
         return :poisson
     else
         return :unsupported
     end
 end
+
+@inline function _impute_censored_y(dist::Distributions.Censored, y, rng)
+    base = dist.uncensored
+    lo, hi = dist.lower, dist.upper
+    if lo !== nothing && y <= lo
+        return rand(rng, truncated(base; upper=lo)), base
+    elseif hi !== nothing && y >= hi
+        return rand(rng, truncated(base; lower=hi)), base
+    else
+        return y, base
+    end
+end
+@inline _impute_censored_y(dist, y, _rng) = (y, dist)
 
 @inline function _saem_outcome_targets(obs_cols, resid_var_param)
     if resid_var_param isa NamedTuple
@@ -1614,7 +1691,8 @@ function _saem_collect_outcome_stats_individual(dm::DataModel,
                                                 θ,
                                                 η_ind,
                                                 cache::_LLCache,
-                                                obs_targets::NamedTuple)
+                                                obs_targets::NamedTuple,
+                                                rng::AbstractRNG)
     isempty(keys(obs_targets)) && return (NamedTuple(), true)
 
     model = dm.model
@@ -1693,8 +1771,9 @@ function _saem_collect_outcome_stats_individual(dm::DataModel,
             _saem_outcome_family(dist) == :unsupported && continue
             y = getfield(obs_series, col)[i]
             ismissing(y) && continue
+            y_use, dist_base = _impute_censored_y(dist, y, rng)
             prev = get(stats_dict, col, nothing)
-            nxt = _saem_push_outcome_stat(prev, dist, y, Tstats)
+            nxt = _saem_push_outcome_stat(prev, dist_base, y_use, Tstats)
             nxt === nothing && return (NamedTuple(), false)
             stats_dict[col] = nxt
         end
@@ -1717,7 +1796,8 @@ function _saem_builtin_collect_current_stats(dm::DataModel,
                                              re_cov_params::NamedTuple,
                                              re_mean_params::NamedTuple,
                                              re_family_map::NamedTuple,
-                                             ll_cache::_LLCache)
+                                             ll_cache::_LLCache,
+                                             rng::AbstractRNG)
     Tθ = promote_type(eltype(θ), Float64)
     cache = dm.re_group_info.laplace_cache
     re_names = cache.re_names
@@ -1737,9 +1817,15 @@ function _saem_builtin_collect_current_stats(dm::DataModel,
                 v = _re_value_from_b(rei, lvl_id, b)
                 v === nothing && continue
                 raw = v isa Number ? Tθ[v] : Tθ.(collect(v))
-                x = if family == :lognormal
+                x = if family == :lognormal || family == :mvlognormal
                     all(raw .> zero(Tθ)) || continue
                     log.(raw)
+                elseif family == :mvlogitnormal
+                    # ALR: z_i = log(η_i / η_{d+1}); raw is (d+1)-dim simplex vector
+                    all(raw .> zero(Tθ)) || continue
+                    η_ref = raw[end]
+                    η_ref > zero(Tθ) || continue
+                    log.(raw[begin:end-1]) .- log(η_ref)
                 elseif family == :normal || family == :mvnormal || family == :exponential
                     raw
                 else
@@ -1771,7 +1857,7 @@ function _saem_builtin_collect_current_stats(dm::DataModel,
             b = b_current[bi]
             for i in info.inds
                 η_ind = _build_eta_ind(dm, i, info, b, const_cache, θ)
-                stats_i, ok = _saem_collect_outcome_stats_individual(dm, i, θ, η_ind, ll_cache, obs_targets)
+                stats_i, ok = _saem_collect_outcome_stats_individual(dm, i, θ, η_ind, ll_cache, obs_targets, rng)
                 if !ok
                     all_supported = false
                     break
@@ -2152,7 +2238,7 @@ function _saem_builtin_updates_from_smoothed_stats(dm::DataModel,
         Σ_hat = 0.5 .* (Σ_hat .+ Σ_hat')
         var_diag = max.(diag(Σ_hat), zero(eltype(Σ_hat)))
         σ_diag = sqrt.(var_diag)
-        cov_diag = family == :mvnormal ? var_diag : σ_diag
+        cov_diag = (family == :mvnormal || family == :mvlognormal || family == :mvlogitnormal) ? var_diag : σ_diag
 
         if haskey(re_mean_params, re)
             _saem_push_param_updates!(updates, θ, getfield(re_mean_params, re), μ_hat;
@@ -2206,7 +2292,7 @@ function _saem_Q(dm::DataModel,
                  const_cache::LaplaceConstantsCache,
                  ll_cache,
                  store::_SAEMSampleStore;
-                 serialization::SciMLBase.EnsembleAlgorithm=EnsembleSerial(),
+                 serialization::SciMLBase.EnsembleAlgorithm=EnsembleThreads(),
                  q_cache::Union{Nothing, _SAEMQCache}=nothing,
                  anneal_sds::NamedTuple=NamedTuple())
     total = zero(eltype(θ))
@@ -2307,7 +2393,7 @@ function _saem_Q_current(dm::DataModel,
                           const_cache::LaplaceConstantsCache,
                           ll_cache,
                           b_current::AbstractVector;
-                          serialization::SciMLBase.EnsembleAlgorithm=EnsembleSerial(),
+                          serialization::SciMLBase.EnsembleAlgorithm=EnsembleThreads(),
                           anneal_sds::NamedTuple=NamedTuple())
     total = zero(eltype(θ))
     ll_cache_local = ll_cache isa Vector ? ll_cache[1] : ll_cache
@@ -2316,6 +2402,99 @@ function _saem_Q_current(dm::DataModel,
         isempty(snap) && continue
         logf = _laplace_logf_batch(dm, info, θ, snap, const_cache, ll_cache_local;
                                    anneal_sds=anneal_sds)
+        !isfinite(logf) && return typeof(total)(Inf)
+        total += logf
+    end
+    return total
+end
+
+# Q2 counterpart to _saem_Q: evaluates only log p(η|θ_re), averaged over the ring buffer.
+# Used for the Q2 M-step (parameters that appear only in RE distribution expressions).
+function _saem_Q2(dm::DataModel,
+                  batch_infos::Vector{_LaplaceBatchInfo},
+                  θ::ComponentArray,
+                  const_cache::LaplaceConstantsCache,
+                  ll_cache,
+                  store::_SAEMSampleStore;
+                  serialization::SciMLBase.EnsembleAlgorithm=EnsembleThreads(),
+                  anneal_sds::NamedTuple=NamedTuple())
+    total = zero(eltype(θ))
+    store.len == 0 && return total
+    weight_sum = _saem_store_weight_sum(store)
+    weight_sum < 1e-300 && return total
+    h_start = store.head
+    active_len = store.len
+    cap = store.capacity
+    if serialization isa SciMLBase.EnsembleThreads
+        nthreads = Threads.maxthreadid()
+        caches = _saem_thread_caches(dm, ll_cache, nthreads)
+        Tθ = eltype(θ)
+        partial_obj = Vector{Tθ}(undef, length(batch_infos))
+        fill!(partial_obj, zero(Tθ))
+        bad = Threads.Atomic{Bool}(false)
+        Threads.@threads for bi in eachindex(batch_infos)
+            bad[] && continue
+            tid = Threads.threadid()
+            info = batch_infos[bi]
+            acc = zero(eltype(θ))
+            h = h_start
+            @inbounds for _ in 1:active_len
+                w = store.weights[h]
+                snap = store.snaps[h][bi]
+                h = h == cap ? 1 : h + 1
+                isempty(snap) && continue
+                logf = _re_logpdf_batch(dm, info, θ, snap, caches[tid];
+                                        anneal_sds=anneal_sds)
+                !isfinite(logf) && (bad[] = true; break)
+                acc += w * logf
+            end
+            bad[] && continue
+            partial_obj[bi] = acc
+        end
+        bad[] && return Inf
+        total = zero(Tθ)
+        @inbounds for bi in eachindex(batch_infos)
+            total += partial_obj[bi]
+        end
+        return total / weight_sum
+    else
+        ll_cache_local = ll_cache isa Vector ? ll_cache[1] : ll_cache
+        for (bi, info) in enumerate(batch_infos)
+            acc = zero(eltype(θ))
+            h = h_start
+            @inbounds for _ in 1:active_len
+                w = store.weights[h]
+                snap = store.snaps[h][bi]
+                h = h == cap ? 1 : h + 1
+                isempty(snap) && continue
+                logf = _re_logpdf_batch(dm, info, θ, snap, ll_cache_local;
+                                        anneal_sds=anneal_sds)
+                !isfinite(logf) && return Inf
+                acc += w * logf
+            end
+            total += acc
+        end
+        return total / weight_sum
+    end
+end
+
+# Q2 counterpart to _saem_Q_current: uses only the current iteration's samples.
+# Used for the Q2 M-step when mstep_sa_on_params=true.
+function _saem_Q2_current(dm::DataModel,
+                           batch_infos::Vector{_LaplaceBatchInfo},
+                           θ::ComponentArray,
+                           const_cache::LaplaceConstantsCache,
+                           ll_cache,
+                           b_current::AbstractVector;
+                           serialization::SciMLBase.EnsembleAlgorithm=EnsembleThreads(),
+                           anneal_sds::NamedTuple=NamedTuple())
+    total = zero(eltype(θ))
+    ll_cache_local = ll_cache isa Vector ? ll_cache[1] : ll_cache
+    for (bi, info) in enumerate(batch_infos)
+        snap = b_current[bi]
+        isempty(snap) && continue
+        logf = _re_logpdf_batch(dm, info, θ, snap, ll_cache_local;
+                                anneal_sds=anneal_sds)
         !isfinite(logf) && return typeof(total)(Inf)
         total += logf
     end
@@ -2367,7 +2546,8 @@ function _saem_log_closed_form_plan(requested_mode::Symbol,
                                     resid_var_param,
                                     hmm_emission_params::NamedTuple,
                                     has_custom_closed_form::Bool,
-                                    base_free_names::Vector{Symbol})
+                                    base_free_names::Vector{Symbol},
+                                    q2_base_free_names::Vector{Symbol})
     cf_syms = Symbol[]
     for v in values(re_cov_params);     _saem_collect_target_symbols!(cf_syms, v); end
     for v in values(re_mean_params);    _saem_collect_target_symbols!(cf_syms, v); end
@@ -2380,11 +2560,17 @@ function _saem_log_closed_form_plan(requested_mode::Symbol,
     if has_custom_closed_form
         union!(cf_set, base_free_names)   # custom closed-form handles everything
     end
+    q2_set = Set(q2_base_free_names)
     numeric_params = [n for n in base_free_names if !(n in cf_set)]
+    q1_numeric = [n for n in numeric_params if n ∉ q2_set]
+    q2_numeric  = [n for n in numeric_params if n ∈ q2_set]
     if isempty(numeric_params)
         @info "SAEM: all parameters handled by closed-form M-step; numeric optimizer inactive."
     else
-        @info "SAEM: numerically optimized parameters: $(numeric_params)"
+        groups = String[]
+        !isempty(q1_numeric) && push!(groups, string(q1_numeric))
+        !isempty(q2_numeric)  && push!(groups, string(q2_numeric) * " (Q2-only)")
+        @info "SAEM: numerically optimized parameters: $(join(groups, "  "))"
     end
     return nothing
 end
@@ -2431,7 +2617,7 @@ function _saem_builtin_mean_updates(dm::DataModel,
                                     inv_transform;
                                     optimizer=OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracking()),
                                     optim_kwargs::NamedTuple=NamedTuple(),
-                                    serialization::SciMLBase.EnsembleAlgorithm=EnsembleSerial(),
+                                    serialization::SciMLBase.EnsembleAlgorithm=EnsembleThreads(),
                                     penalty::NamedTuple=NamedTuple(),
                                     anneal_sds::NamedTuple=NamedTuple())
     isempty(mean_params) && return NamedTuple()
@@ -2485,7 +2671,7 @@ function _fit_model(dm::DataModel, method::SAEM, args...;
                     penalty::NamedTuple=NamedTuple(),
                     ode_args::Tuple=(),
                     ode_kwargs::NamedTuple=NamedTuple(),
-                    serialization::SciMLBase.EnsembleAlgorithm=EnsembleSerial(),
+                    serialization::SciMLBase.EnsembleAlgorithm=EnsembleThreads(),
                     rng::AbstractRNG=Xoshiro(0),
                     theta_0_untransformed::Union{Nothing, ComponentArray}=nothing,
                     store_eb_modes::Bool=true,
@@ -2585,9 +2771,14 @@ function _fit_model(dm::DataModel, method::SAEM, args...;
         end
     end
     has_custom_closed_form = method.saem.suffstats !== nothing && method.saem.mstep_closed_form !== nothing
+    # Detect Q2-only free parameters (appear only in RE distributions, never in obs-side blocks).
+    # These are optimised in a cheap separate M-step that skips ODE evaluation entirely.
+    q2_base_free_names = let p = _partition_q1_q2_names(dm.model, base_free_names)
+        p.q2
+    end
     _saem_log_closed_form_plan(method.saem.builtin_stats, builtin_stats_mode, builtin_cf_elig,
                                re_cov_params, re_mean_params, resid_var_param, hmm_emission_params,
-                               has_custom_closed_form, base_free_names)
+                               has_custom_closed_form, base_free_names, q2_base_free_names)
     re_family_map = _saem_re_family_map(dm)
 
     # anneal_to_fixed validation
@@ -2815,7 +3006,7 @@ function _fit_model(dm::DataModel, method::SAEM, args...;
                                                              ComponentArray(θu_curr, getaxes(θu_curr)), const_cache,
                                                              resid_var_param, hmm_emission_params,
                                                              re_cov_params, re_mean_params,
-                                                             re_family_map, cache)
+                                                             re_family_map, cache, rng)
             builtin_stats_state = _saem_builtin_smooth_stats(builtin_stats_state, curr_stats, γ)
             updates = _saem_builtin_updates_from_smoothed_stats(dm, ComponentArray(θu_curr, getaxes(θu_curr)),
                                                                 builtin_stats_state, resid_var_param, hmm_emission_params,
@@ -2891,6 +3082,80 @@ function _fit_model(dm::DataModel, method::SAEM, args...;
         base_free_names = free_names_iter
         θ_const_t = θ_const_t_iter
         axs_full = axs_full_iter
+
+        # ── Q2 numerical M-step ──────────────────────────────────────────────
+        # Optimise parameters that appear only in RE distribution expressions.
+        # No ODE calls needed — objective is purely log p(η | θ_Q2).
+        let q2_free_now = [n for n in q2_base_free_names if n ∉ keys(iter_constants)]
+            if !isempty(q2_free_now)
+                θt_q2 = ComponentArray(NamedTuple{Tuple(q2_free_now)}(
+                    Tuple(getproperty(θt_full_curr, n) for n in q2_free_now)))
+                axs_q2 = getaxes(θt_q2)
+                function obj_q2(ψt, p)
+                    any(isnan, ψt) && return eltype(ψt)(Inf)
+                    ψt_ca = ψt isa ComponentArray ? ψt : ComponentArray(ψt, axs_q2)
+                    T = eltype(ψt_ca)
+                    θt_full_q2 = ComponentArray(T.(collect(θt_full_curr)), axs_full_iter)
+                    for name in q2_free_now
+                        setproperty!(θt_full_q2, name, getproperty(ψt_ca, name))
+                    end
+                    θu_q2 = inv_transform(θt_full_q2)
+                    Q2val = if method.saem.mstep_sa_on_params
+                        _saem_Q2_current(dm, batch_infos, θu_q2, const_cache, ll_cache,
+                                         b_current; serialization=serialization,
+                                         anneal_sds=anneal_sds)
+                    else
+                        _saem_Q2(dm, batch_infos, θu_q2, const_cache, ll_cache,
+                                 sample_store; serialization=serialization,
+                                 anneal_sds=anneal_sds)
+                    end
+                    isfinite(Q2val) || return T(Inf)
+                    return -Q2val
+                end
+                lower_t_q2, upper_t_q2 = get_bounds_transformed(fe)
+                lb_q2 = collect(ComponentArray(NamedTuple{Tuple(q2_free_now)}(
+                    Tuple(getproperty(lower_t_q2, n) for n in q2_free_now))))
+                ub_q2 = collect(ComponentArray(NamedTuple{Tuple(q2_free_now)}(
+                    Tuple(getproperty(upper_t_q2, n) for n in q2_free_now))))
+                use_bounds_q2 = !(all(isinf, lb_q2) && all(isinf, ub_q2))
+                θ0_q2 = collect(θt_q2)
+                optf_q2 = OptimizationFunction(obj_q2, method.adtype)
+                prob_q2 = use_bounds_q2 ?
+                    OptimizationProblem(optf_q2, θ0_q2; lb=lb_q2, ub=ub_q2) :
+                    OptimizationProblem(optf_q2, θ0_q2)
+                sol_q2 = Optimization.solve(prob_q2, method.optimizer; method.optim_kwargs...)
+                if all(isfinite, sol_q2.u)
+                    θt_q2_opt = ComponentArray(sol_q2.u, axs_q2)
+                    if method.saem.mstep_sa_on_params
+                        θt_q2_before = collect(θt_q2)
+                        θt_q2_opt = ComponentArray(
+                            θt_q2_before .+ γ .* (collect(θt_q2_opt) .- θt_q2_before),
+                            axs_q2)
+                    end
+                    θt_full_q2_opt = ComponentArray(collect(θt_full_curr), axs_full_iter)
+                    for name in q2_free_now
+                        setproperty!(θt_full_q2_opt, name, getproperty(θt_q2_opt, name))
+                    end
+                    θu_q2_opt = inv_transform(θt_full_q2_opt)
+                    q2_updates = NamedTuple{Tuple(q2_free_now)}(
+                        Tuple(getproperty(θu_q2_opt, n) for n in q2_free_now))
+                    iter_constants = merge(iter_constants, q2_updates)
+                    iter_constants = _saem_clamp_constants_to_bounds(iter_constants, fe)
+                    # Recompute free names / axes with Q2 params now treated as constants
+                    free_names_iter = [n for n in fixed_names if n ∉ keys(iter_constants)]
+                    θt_free = ComponentArray(NamedTuple{Tuple(free_names_iter)}(
+                        Tuple(getproperty(θt_full_curr, n) for n in free_names_iter)))
+                    axs_free = getaxes(θt_free)
+                    copyto!(θ_const_u_work, θ0_u)
+                    _apply_constants!(θ_const_u_work, iter_constants)
+                    θ_const_t_iter = transform(θ_const_u_work)
+                    axs_full_iter = getaxes(θ_const_t_iter)
+                    base_free_names = free_names_iter
+                    θ_const_t = θ_const_t_iter
+                    axs_full = axs_full_iter
+                end
+            end
+        end
 
         anneal_was_active = false
         all_fixed_by_builtin = isempty(free_names_iter)
@@ -3111,7 +3376,8 @@ function _fit_model(dm::DataModel, method::SAEM, args...;
              closed_form_mstep_sources=Tuple(closed_form_sources),
              builtin_stats_mode_requested=method.saem.builtin_stats,
              builtin_stats_mode_effective=builtin_stats_mode,
-             builtin_stats_closed_form_eligibility=builtin_cf_elig)
+             builtin_stats_closed_form_eligibility=builtin_cf_elig,
+             anneal_to_fixed=method.saem.anneal_to_fixed)
     summary = FitSummary(Q_prev, converged,
                          FitParameters(θ_hat_t, θ_hat_u),
                          notes)
@@ -3126,10 +3392,22 @@ function _fit_model(dm::DataModel, method::SAEM, args...;
     ebe = EBEOptions(method.saem.ebe_optimizer, method.saem.ebe_optim_kwargs, method.saem.ebe_adtype,
                      method.saem.ebe_grad_tol, method.saem.ebe_multistart_n, method.saem.ebe_multistart_k,
                      method.saem.ebe_multistart_max_rounds, method.saem.ebe_multistart_sampling)
-    eb_modes = store_eb_modes ? _compute_bstars(dm, θ_hat_u, fixed_maps, ll_cache, ebe, rng;
+    ebe_fixed_maps = _saem_anneal_constants_re(dm, θ_hat_u, method.saem.anneal_to_fixed,
+                                               fixed_maps)
+    last_b_candidates = [
+        isempty(b_chains[bi]) ? Matrix{Float64}(undef, 0, 0) : hcat(b_chains[bi]...)
+        for bi in eachindex(batch_infos)
+    ]
+    eb_modes = store_eb_modes ? _compute_bstars(dm, θ_hat_u, ebe_fixed_maps, ll_cache, ebe, rng;
                                                 rescue=method.saem.ebe_rescue,
                                                 progress=method.saem.progress,
-                                                progress_desc="SAEM Final EBE")[1] : nothing
+                                                progress_desc="SAEM Final EBE",
+                                                mcmc_candidates_by_batch=last_b_candidates)[1] : nothing
     result = SAEMResult(nothing, Q_prev, length(diag.Q_hist), nothing, notes, eb_modes)
     return FitResult(method, result, summary, diagnostics, store_data_model ? dm : nothing, args, fit_kwargs)
+end
+
+function _with_eb_modes(result::SAEMResult, eb_modes)
+    return SAEMResult(result.solution, result.objective, result.iterations,
+                      result.raw, result.notes, eb_modes)
 end

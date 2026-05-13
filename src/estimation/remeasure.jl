@@ -329,6 +329,47 @@ function build_re_measure_from_batch(
                 end
                 push!(correction_fns, nothing)
 
+            elseif dist isa Distributions.MvLogNormal
+                # η = exp(μ_log + L*z), z ~ N(0,I).  Push-forward IS MvLogNormal, correction = 0.
+                has_npf = true
+                d_inner = dist.normal
+                μ_k = Vector(Distributions.mean(d_inner))
+                Σ = d_inner.Σ
+                if Σ isa Distributions.PDMats.PDMat && isdefined(Σ, :chol)
+                    L_k = Matrix(Σ.chol.L)
+                else
+                    Σ_mat = Σ isa AbstractMatrix ? Σ : Matrix(Σ)
+                    L_k   = Matrix(cholesky(Symmetric(Σ_mat + 1e-12 * I)).L)
+                end
+                push!(μ_segs, μ_k); push!(L_diags, L_k)
+                let μ = μ_k, L = L_k
+                    push!(segment_fns, z_k -> exp.(μ .+ L * z_k))
+                end
+                push!(correction_fns, nothing)
+
+            elseif dist isa Distributions.MvLogitNormal
+                # MvLogitNormal: length(dist) = d+1 (simplex), inner normal has dim d.
+                # z ~ MvNormal(μ, Σ) (d-dim), η = softmax(vcat(μ+L*z, 0)) (d+1-dim simplex).
+                has_npf = true
+                d_inner = dist.normal
+                μ_k = Vector(Distributions.mean(d_inner))
+                Σ = d_inner.Σ
+                if Σ isa Distributions.PDMats.PDMat && isdefined(Σ, :chol)
+                    L_k = Matrix(Σ.chol.L)
+                else
+                    Σ_mat = Σ isa AbstractMatrix ? Σ : Matrix(Σ)
+                    L_k   = Matrix(cholesky(Symmetric(Σ_mat + 1e-12 * I)).L)
+                end
+                push!(μ_segs, μ_k); push!(L_diags, L_k)
+                let μ = μ_k, L = L_k
+                    push!(segment_fns, z_k -> begin
+                        u = μ .+ L * z_k
+                        unnorm = vcat(exp.(u), one(eltype(u)))
+                        unnorm ./ sum(unnorm)
+                    end)
+                end
+                push!(correction_fns, nothing)
+
             elseif dist isa Distributions.LogNormal
                 # η = exp(μ_log + σ_log * z), z ~ N(0,1)
                 # Push-forward of N(0,1) under this map IS LogNormal(μ_log, σ_log),
@@ -513,7 +554,7 @@ function build_re_measure_from_batch(
                 error(
                     "build_re_measure_from_batch: unsupported RE distribution type " *
                     "$(typeof(dist)) for RE '$(re)'. " *
-                    "Supported: Normal, MvNormal, LogNormal, Beta, NormalizingPlanarFlow."
+                    "Supported: Normal, MvNormal, MvLogNormal, MvLogitNormal, LogNormal, Beta, NormalizingPlanarFlow."
                 )
             end
         end
@@ -601,7 +642,10 @@ function build_centered_re_measure(
     jitter::Float64=1e-6,
     max_tries::Int=6,
 )
-    T = eltype(b_star)
+    # Always work in Float64: SAEM stores eb_modes as Float32, and the Hessian
+    # computation promotes to Float64 regardless, so T must be Float64.
+    b_star = Vector{Float64}(b_star)
+    T = Float64
     H = _laplace_hessian_b(dm, batch_info, θu, b_star, const_cache, ll_cache, nothing, bi)
     chol, _ = _laplace_cholesky_negH(H; jitter=jitter, max_tries=max_tries)
     (chol === nothing || chol.info != 0) && return nothing

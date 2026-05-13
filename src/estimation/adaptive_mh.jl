@@ -24,6 +24,8 @@ The sampler works in the natural proposal space for each distribution family:
 |-------------------|----------------|---------------|
 | `Normal`          | η ∈ ℝ          | identity      |
 | `MvNormal`        | η ∈ ℝ^d        | identity      |
+| `MvLogNormal`     | z = log.(η)    | log / exp (component-wise) |
+| `MvLogitNormal`   | z = logit.(η)  | logit / logistic (component-wise) |
 | `LogNormal`       | z = log(η)     | log / exp     |
 | `Exponential`     | z = log(η)     | log / exp     |
 | `Beta`            | z = logit(η)   | logit / sigmoid |
@@ -119,6 +121,40 @@ end
 @inline _amh_bij_inverse(::Val{:MvNormal}, z::AbstractVector)  = Vector{Float64}(z)
 @inline _amh_bij_log_jac(::Val{:MvNormal}, ::AbstractVector, ::AbstractVector) = 0.0
 
+# MvLogNormal: component-wise log bijection (η ∈ (0,∞)^d)
+# J_f(η) diagonal 1/η_i → log|J| = -sum(z);  MH correction = sum(z_new) - sum(z_old)
+@inline _amh_bij_forward(::Val{:MvLogNormal}, η::AbstractVector) =
+    Float64.(log.(max.(η, 1e-300)))
+@inline _amh_bij_inverse(::Val{:MvLogNormal}, z::AbstractVector) = Float64.(exp.(z))
+@inline _amh_bij_log_jac(::Val{:MvLogNormal}, z_new::AbstractVector, z_old::AbstractVector) =
+    sum(z_new) - sum(z_old)
+
+# MvLogitNormal: ALR (additive log-ratio) bijection for the simplex distribution.
+# length(dist) = d+1 (outer dim); inner MvNormal has dim d.
+# η ∈ Δ^{d+1} (simplex), z ∈ ℝ^d (inner normal coords).
+# Forward: z_i = log(η_i / η_{d+1})  (ALR, last component as reference)
+# Inverse: η = softmax(vcat(z, 0))
+# log|J_{z→η}| = -sum(log η) = (d+1)log(1+sum(exp(z))) - sum(z)
+# MH correction = log|J(z_new→η_new)| - log|J(z_old→η_old)|
+@inline function _amh_bij_forward(::Val{:MvLogitNormal}, η::AbstractVector)
+    ηf  = max.(Float64.(η), 1e-300)
+    ref = ηf[end]
+    return log.(ηf[begin:end-1]) .- log(ref)
+end
+@inline function _amh_bij_inverse(::Val{:MvLogitNormal}, z::AbstractVector)
+    zf = Float64.(z)
+    S  = 1.0 + sum(exp.(zf))
+    return vcat(exp.(zf) ./ S, 1.0 / S)
+end
+@inline function _amh_bij_log_jac(::Val{:MvLogitNormal},
+                                   z_new::AbstractVector, z_old::AbstractVector)
+    function _log_jac_mlogit(z)
+        S = 1.0 + sum(exp.(z))
+        return (length(z) + 1) * log(S) - sum(z)
+    end
+    return _log_jac_mlogit(z_new) - _log_jac_mlogit(z_old)
+end
+
 # LogNormal: log bijection (η > 0)
 # J_f(η) = 1/η  →  log|J_f| = -log(η) = -z
 # Correction: -z_old - (-z_new) = z_new - z_old
@@ -183,6 +219,13 @@ end
 @inline _bij_log_jac_forward(::Val{:Normal}, ::Real)              = 0.0
 @inline _bij_log_jac_forward(::Val{:MvNormal}, ::AbstractVector)  = 0.0
 @inline _bij_log_jac_forward(::Val{:NormalizingPlanarFlow}, ::AbstractVector) = 0.0
+# MvLogNormal: z = log(η), log|dz/dη| = -sum(z_i)
+@inline _bij_log_jac_forward(::Val{:MvLogNormal}, z::AbstractVector) = -sum(z)
+# MvLogitNormal: z = alr(η) (ALR, d-dim), log|dz/dη| = sum(z) - (d+1)*log(1+sum(exp(z)))
+@inline function _bij_log_jac_forward(::Val{:MvLogitNormal}, z::AbstractVector)
+    S = 1.0 + sum(exp.(Float64.(z)))
+    return sum(z) - (length(z) + 1) * log(S)
+end
 
 # LogNormal: z = log(η), dz/dη = 1/η = exp(-z) → log|dz/dη| = -z
 @inline _bij_log_jac_forward(::Val{:LogNormal}, z::Real)   = -Float64(z)
@@ -226,6 +269,21 @@ function _amh_init_cov(dist::AbstractMvNormal, dim::Int,
     λ = 2.38^2 / dim * init_scale
     Ω = Matrix{Float64}(cov(dist))
     return λ .* Ω .+ eps_reg .* Matrix{Float64}(I(dim))
+end
+
+function _amh_init_cov(dist::MvLogNormal, dim::Int,
+                        init_scale::Float64, eps_reg::Float64)
+    λ = 2.38^2 / dim * init_scale
+    Ω = Matrix{Float64}(cov(dist.normal))
+    return λ .* Ω .+ eps_reg .* Matrix{Float64}(I(dim))
+end
+
+function _amh_init_cov(dist::MvLogitNormal, ::Int,
+                        init_scale::Float64, eps_reg::Float64)
+    d = length(dist.normal)   # proposal dimension = inner normal dim (NOT length(dist) = d+1)
+    λ = 2.38^2 / d * init_scale
+    Ω = Matrix{Float64}(cov(dist.normal))
+    return λ .* Ω .+ eps_reg .* Matrix{Float64}(I(d))
 end
 
 function _amh_init_cov(dist::LogNormal, ::Int,
@@ -315,7 +373,7 @@ function _amh_haario_update!(block::_REAdaptBlock, z::AbstractVector{<:Real},
                               adapt_start::Int, eps_reg::Float64)
     block.n_samples += 1
     n  = block.n_samples
-    d  = block.dim
+    d  = length(z)
     zf = Vector{Float64}(z)
     # Welford update
     δ = zf .- block.μ_run
@@ -403,13 +461,14 @@ function _amh_init_state(dm::DataModel, info::_LaplaceBatchInfo,
         # Precompute per-level individual indices (for incremental log-joint)
         level_inds = _amh_build_level_inds(info, ri, laplace_cache)
 
+        pdim = size(C, 1)  # proposal dimension (may differ from dim for MvLogitNormal)
         push!(blocks, _REAdaptBlock(
             re_name, re_type, dim, n_levels, ri,
             lp_offset, level_inds,
             C,
-            _amh_chol_L(C, dim),
-            zeros(Float64, dim),
-            zeros(Float64, dim, dim),
+            _amh_chol_L(C, pdim),
+            zeros(Float64, pdim),
+            zeros(Float64, pdim, pdim),
             0,
         ))
         lp_offset += n_levels
