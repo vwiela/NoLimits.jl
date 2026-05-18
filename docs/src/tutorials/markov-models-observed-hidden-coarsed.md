@@ -395,8 +395,7 @@ This notebook focuses on fixed-effects HMMs for clarity, but the same NoLimits b
 
 Below is an example using covariate dependent transition rates on log-scale and emission with logistic parametrization.
 
-Using random effects also requires a different estimation method such as Laplace, SAEM, MCEM, for further information look ....
-
+Using random effects also requires a different estimation method such as Laplace, SAEM or MCEM.
 ```julia
 model_custom = @Model begin
     @covariates begin
