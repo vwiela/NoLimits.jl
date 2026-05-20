@@ -196,7 +196,7 @@ get_multistart_best
 
 ### Cross-Validation
 
-See [Cross Validation](@ref) for the full API.
+See the [Cross-Validation](../estimation/cv.md) page for the full API.
 
 ### Fit Summaries
 
