@@ -246,6 +246,47 @@ end
     @test NoLimits.get_objective(res) !== nothing
 end
 
+@testset "var lb prevents collapse without explicit lower= bound (regression)" begin
+    # Identical observations → true inter-individual RE variance ≈ 0. Without the fix,
+    # the closed-form M-step writes σ = 0 into iter_constants → log(0) = -Inf in
+    # θ_const_t → Q = Inf and the algorithm is stuck. With the fix, auto_var_lb clamps
+    # iter_constants before θ_const_t is built, so σ stays ≥ var_lb_value.
+    m = @Model begin
+        @fixedEffects begin
+            a = RealNumber(0.5)
+            ω = RealNumber(0.4; scale=:log)    # deliberately NO lower= bound
+            σ = RealNumber(0.3; scale=:log)    # deliberately NO lower= bound
+        end
+        @randomEffects begin
+            η = RandomEffect(LogNormal(0.0, ω); column=:ID)
+        end
+        @covariates begin
+            t = Covariate()
+        end
+        @formulas begin
+            y ~ Normal(a + η, σ)
+        end
+    end
+    df = DataFrame(
+        ID=repeat(1:8, inner=4),
+        t=repeat([0.0, 1.0, 2.0, 3.0], 8),
+        y=fill(0.5, 32)   # identical observations → RE variance collapses to 0 immediately
+    )
+    dm = DataModel(m, df; primary_id=:ID, time_col=:t)
+    res = fit_model(dm, NoLimits.SAEM(;
+        sampler=MH(),
+        turing_kwargs=(n_samples=3, n_adapt=2, progress=false),
+        maxiters=20,
+        t0=5,
+        auto_var_lb=true,
+        var_lb_value=1e-5
+    ))
+    θ = NoLimits.get_params(res; scale=:untransformed)
+    @test Float64(θ.ω) >= 1e-5
+    @test Float64(θ.σ) >= 1e-5
+    @test isfinite(NoLimits.get_objective(res))
+end
+
 @testset "anneal_to_fixed: MvNormal RE — sd0 from initial distribution" begin
     m = @Model begin
         @fixedEffects begin

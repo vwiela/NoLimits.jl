@@ -749,6 +749,36 @@ function _saem_apply_var_lb(θu::ComponentArray, targets, lb_value::Float64)
     return new_θu
 end
 
+function _saem_apply_var_lb_to_constants(constants::NamedTuple, targets, lb_value::Float64)
+    isempty(targets) && return constants
+    pairs = Pair{Symbol, Any}[]
+    changed = false
+    for name in keys(constants)
+        val = getfield(constants, name)
+        if name in targets
+            if val isa Number && Float64(val) < lb_value
+                push!(pairs, name => lb_value)
+                changed = true
+                continue
+            elseif val isa AbstractArray
+                needs_clamp = any(v -> Float64(v) < lb_value, val)
+                if needs_clamp
+                    new_val = copy(val)
+                    for i in eachindex(new_val)
+                        Float64(new_val[i]) < lb_value && (new_val[i] = lb_value)
+                    end
+                    push!(pairs, name => new_val)
+                    changed = true
+                    continue
+                end
+            end
+        end
+        push!(pairs, name => val)
+    end
+    changed || return constants
+    return NamedTuple(pairs)
+end
+
 function _saem_stats_update(s, s_new, γ)
     γ == 0.0 && return s
     s === nothing && return s_new
@@ -3107,6 +3137,9 @@ function _fit_model(dm::DataModel, method::SAEM, args...;
             @info "Unknown builtin_mean option; using numeric SAEM." option=method.saem.builtin_mean
         end
         iter_constants = _saem_clamp_constants_to_bounds(iter_constants, fe)
+        if !isempty(var_lb_targets)
+            iter_constants = _saem_apply_var_lb_to_constants(iter_constants, var_lb_targets, var_lb_eff)
+        end
         # build per-iteration free set / transforms
         free_names_iter = [n for n in fixed_names if !(n in keys(iter_constants))]
         θt_free = ComponentArray(NamedTuple{Tuple(free_names_iter)}(Tuple(getproperty(θt_full_curr, n) for n in free_names_iter)))
@@ -3178,6 +3211,9 @@ function _fit_model(dm::DataModel, method::SAEM, args...;
                         Tuple(getproperty(θu_q2_opt, n) for n in q2_free_now))
                     iter_constants = merge(iter_constants, q2_updates)
                     iter_constants = _saem_clamp_constants_to_bounds(iter_constants, fe)
+                    if !isempty(var_lb_targets)
+                        iter_constants = _saem_apply_var_lb_to_constants(iter_constants, var_lb_targets, var_lb_eff)
+                    end
                     # Recompute free names / axes with Q2 params now treated as constants
                     free_names_iter = [n for n in fixed_names if n ∉ keys(iter_constants)]
                     θt_free = ComponentArray(NamedTuple{Tuple(free_names_iter)}(
