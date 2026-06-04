@@ -26,9 +26,9 @@ struct RandomEffectsMeta
     re_dist_exprs::NamedTuple
 end
 
-struct RandomEffectsBuilders
-    create_random_effect_distribution::Function
-    logpdf::Function
+struct RandomEffectsBuilders{C, L}
+    create_random_effect_distribution::C
+    logpdf::L
 end
 
 """
@@ -40,9 +40,9 @@ constructing distributions and evaluating log-densities.
 
 Use accessor functions rather than accessing fields directly.
 """
-struct RandomEffects
+struct RandomEffects{B<:RandomEffectsBuilders}
     meta::RandomEffectsMeta
-    builders::RandomEffectsBuilders
+    builders::B
 end
 
 """

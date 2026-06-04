@@ -344,12 +344,16 @@ function _saemixmh_kern1!(state::_SaemixMHState,
     b_prop     = state.b_prop
     indiv_ll   = state.indiv_ll
 
+    # Note: kernel 1 iterates step-outer / level-inner, so hoisting the (b-independent)
+    # prior build out of the step loop would require materialising a per-level vector.
+    # In the common case each batch holds a single level, where that allocation outweighs
+    # the saved rebuild, so the build is left in place here (kernels 2 & 3, which are
+    # level-outer, hoist it cheaply).
     for _ in 1:n_steps
         for (k, lv) in enumerate(state.levels)
             re    = re_names[lv.ri]
             const_cov = dm.individuals[lv.rep_ind].const_cov
-            dists = dists_builder(θ_re, const_cov, model_funs, helpers)
-            dist  = getproperty(dists, re)
+            dist  = getproperty(dists_builder(θ_re, const_cov, model_funs, helpers), re)
             if has_anneal && haskey(anneal_sds, re)
                 dist = _saem_apply_anneal_dist(dist, getfield(anneal_sds, re))
             end
@@ -436,15 +440,14 @@ function _saemixmh_kern2!(state::_SaemixMHState,
         nbc2 = zeros(Int, lv.dim)
         nt2  = zeros(Int, lv.dim)
         domega2_k = state.domega2[k]
+        # Hoist the prior distribution out of the step loop (constant in b across steps).
+        re    = re_names[lv.ri]
+        const_cov = dm.individuals[lv.rep_ind].const_cov
+        dist  = getproperty(dists_builder(θ_re, const_cov, model_funs, helpers), re)
+        if has_anneal && haskey(anneal_sds, re)
+            dist = _saem_apply_anneal_dist(dist, getfield(anneal_sds, re))
+        end
         for _ in 1:n_steps
-            re    = re_names[lv.ri]
-            const_cov = dm.individuals[lv.rep_ind].const_cov
-            dists = dists_builder(θ_re, const_cov, model_funs, helpers)
-            dist  = getproperty(dists, re)
-            if has_anneal && haskey(anneal_sds, re)
-                dist = _saem_apply_anneal_dist(dist, getfield(anneal_sds, re))
-            end
-
             r = lv.range
 
             # Per-dimension coordinate-wise proposal (in bijected z-space)
@@ -547,14 +550,14 @@ function _saemixmh_kern3!(state::_SaemixMHState,
         nt2  = zeros(Int, d)
         VK = vcat(collect(1:d), collect(1:d))
         domega2_k = state.domega2[k]
+        # Hoist the prior distribution out of the step loop (constant in b across steps).
+        re    = re_names[lv.ri]
+        const_cov = dm.individuals[lv.rep_ind].const_cov
+        dist  = getproperty(dists_builder(θ_re, const_cov, model_funs, helpers), re)
+        if has_anneal && haskey(anneal_sds, re)
+            dist = _saem_apply_anneal_dist(dist, getfield(anneal_sds, re))
+        end
         for _ in 1:n_steps
-            re    = re_names[lv.ri]
-            const_cov = dm.individuals[lv.rep_ind].const_cov
-            dists = dists_builder(θ_re, const_cov, model_funs, helpers)
-            dist  = getproperty(dists, re)
-            if has_anneal && haskey(anneal_sds, re)
-                dist = _saem_apply_anneal_dist(dist, getfield(anneal_sds, re))
-            end
             r = lv.range
             if nrs2 < d
                 vk = vcat(0, randperm(rng, d - 1)[1:(nrs2 - 1)])

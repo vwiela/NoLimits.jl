@@ -3409,8 +3409,17 @@ function _fit_model(dm::DataModel, method::SAEM, args...;
         push!(diag.n_chains_used, effective_n_chains)
         push!(diag.anneal_active, anneal_was_active)
 
-        obsLL_new = T0(_saem_obsLL(dm, batch_infos, θu_new, const_cache, ll_cache, b_current))
-        if method.saem.store_obsLL && iter % method.saem.obsLL_every == 0
+        # _saem_obsLL is a full-data observed-likelihood sweep (one ODE solve per
+        # individual for ODE models). Only evaluate it when something actually consumes
+        # the value — the diagnostics history, the verbose log, or the progress bar —
+        # rather than unconditionally every iteration (it is discarded when all display
+        # is disabled).
+        store_obsLL_now = method.saem.store_obsLL && iter % method.saem.obsLL_every == 0
+        need_obsLL = store_obsLL_now || method.saem.verbose || method.saem.progress
+        obsLL_new = need_obsLL ?
+            T0(_saem_obsLL(dm, batch_infos, θu_new, const_cache, ll_cache, b_current)) :
+            T0(NaN)
+        if store_obsLL_now
             push!(diag.obsLL_hist, obsLL_new)
         end
         if method.saem.verbose

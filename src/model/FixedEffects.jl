@@ -49,12 +49,12 @@ struct FixedEffectsTransforms
     inverse::InverseTransform
 end
 
-struct FixedEffectsExtras
-    priors::NamedTuple
+struct FixedEffectsExtras{P<:NamedTuple, MF<:NamedTuple, PA<:NamedTuple}
+    priors::P
     se_mask_transformed::Vector{Bool}
     se_names_transformed::Vector{Symbol}
-    model_funs::NamedTuple
-    params::NamedTuple
+    model_funs::MF
+    params::PA
 end
 
 """
@@ -66,12 +66,12 @@ soft trees, NPFs).
 
 Use accessor functions rather than accessing fields directly.
 """
-struct FixedEffects
+struct FixedEffects{E<:FixedEffectsExtras}
     meta::FixedEffectsMeta
     values::FixedEffectsValues
     bounds::FixedEffectsBounds
     transforms::FixedEffectsTransforms
-    extras::FixedEffectsExtras
+    extras::E
 end
 
 """    get_meta(fe::FixedEffects) -> FixedEffectsMeta

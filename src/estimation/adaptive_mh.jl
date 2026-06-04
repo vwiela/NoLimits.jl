@@ -200,10 +200,47 @@ end
 @inline _amh_bij_inverse(::Val, z) = z
 @inline _amh_bij_log_jac(::Val, z_new, z_old) = 0.0
 
-# Symbol-based dispatch wrappers
-@inline _amh_bij_forward(s::Symbol, η)            = _amh_bij_forward(Val(s), η)
-@inline _amh_bij_inverse(s::Symbol, z)            = _amh_bij_inverse(Val(s), z)
-@inline _amh_bij_log_jac(s::Symbol, z_new, z_old) = _amh_bij_log_jac(Val(s), z_new, z_old)
+# Symbol-based dispatch wrappers.
+# `Val(s)` with a *runtime* Symbol `s` is type-unstable (the type `Val{s}` is computed
+# at runtime), forcing dynamic dispatch and an allocation on every call — these wrappers
+# sit in the per-coordinate MH proposal inner loop. Branching over the finite set of known
+# RE-type symbols lets each branch dispatch to a `Val`-*literal* method (a compile-time
+# constant), eliminating the dynamic `Val(s)` construction. Behaviour is identical: the
+# branch set is exactly the set of specialised `Val{:X}` methods, and any other symbol
+# falls through to the generic `::Val` identity method.
+@inline function _amh_bij_forward(s::Symbol, η)
+    s === :Normal                && return _amh_bij_forward(Val(:Normal), η)
+    s === :LogNormal             && return _amh_bij_forward(Val(:LogNormal), η)
+    s === :Exponential           && return _amh_bij_forward(Val(:Exponential), η)
+    s === :Beta                  && return _amh_bij_forward(Val(:Beta), η)
+    s === :MvNormal              && return _amh_bij_forward(Val(:MvNormal), η)
+    s === :MvLogNormal           && return _amh_bij_forward(Val(:MvLogNormal), η)
+    s === :MvLogitNormal         && return _amh_bij_forward(Val(:MvLogitNormal), η)
+    s === :NormalizingPlanarFlow && return _amh_bij_forward(Val(:NormalizingPlanarFlow), η)
+    return _amh_bij_forward(Val(:__generic__), η)
+end
+@inline function _amh_bij_inverse(s::Symbol, z)
+    s === :Normal                && return _amh_bij_inverse(Val(:Normal), z)
+    s === :LogNormal             && return _amh_bij_inverse(Val(:LogNormal), z)
+    s === :Exponential           && return _amh_bij_inverse(Val(:Exponential), z)
+    s === :Beta                  && return _amh_bij_inverse(Val(:Beta), z)
+    s === :MvNormal              && return _amh_bij_inverse(Val(:MvNormal), z)
+    s === :MvLogNormal           && return _amh_bij_inverse(Val(:MvLogNormal), z)
+    s === :MvLogitNormal         && return _amh_bij_inverse(Val(:MvLogitNormal), z)
+    s === :NormalizingPlanarFlow && return _amh_bij_inverse(Val(:NormalizingPlanarFlow), z)
+    return _amh_bij_inverse(Val(:__generic__), z)
+end
+@inline function _amh_bij_log_jac(s::Symbol, z_new, z_old)
+    s === :Normal                && return _amh_bij_log_jac(Val(:Normal), z_new, z_old)
+    s === :LogNormal             && return _amh_bij_log_jac(Val(:LogNormal), z_new, z_old)
+    s === :Exponential           && return _amh_bij_log_jac(Val(:Exponential), z_new, z_old)
+    s === :Beta                  && return _amh_bij_log_jac(Val(:Beta), z_new, z_old)
+    s === :MvNormal              && return _amh_bij_log_jac(Val(:MvNormal), z_new, z_old)
+    s === :MvLogNormal           && return _amh_bij_log_jac(Val(:MvLogNormal), z_new, z_old)
+    s === :MvLogitNormal         && return _amh_bij_log_jac(Val(:MvLogitNormal), z_new, z_old)
+    s === :NormalizingPlanarFlow && return _amh_bij_log_jac(Val(:NormalizingPlanarFlow), z_new, z_old)
+    return _amh_bij_log_jac(Val(:__generic__), z_new, z_old)
+end
 
 # ---------------------------------------------------------------------------
 # Absolute log-Jacobian of the forward bijection η → z at a single point
