@@ -120,7 +120,8 @@ function compute_uq(res::FitResult;
                                  rng=rng)
     elseif backend == :wald
         src_method = get_method(res)
-        if src_method isa MLE || src_method isa MAP
+        if src_method isa MLE || src_method isa MAP ||
+           src_method isa Pooled || src_method isa PooledMap
             return _compute_uq_wald_no_re(res;
                                           level=level_use,
                                           vcov=vcov,
@@ -137,6 +138,7 @@ function compute_uq(res::FitResult;
                                           serialization=serialization,
                                           rng=rng)
         elseif src_method isa Laplace || src_method isa LaplaceMAP ||
+               src_method isa FOCEI || src_method isa FOCEIMAP ||
                src_method isa MCEM || src_method isa SAEM ||
                src_method isa GHQuadrature || src_method isa GHQuadratureMAP
             return _compute_uq_wald_re(res;
@@ -158,7 +160,7 @@ function compute_uq(res::FitResult;
                                        serialization=serialization,
                                        rng=rng)
         else
-            error("Wald UQ is currently supported for MLE, MAP, Laplace, LaplaceMAP, MCEM, SAEM, GHQuadrature, and GHQuadratureMAP fit results.")
+            error("Wald UQ is currently supported for MLE, MAP, Pooled, PooledMap, Laplace, LaplaceMAP, FOCEI, FOCEIMAP, MCEM, SAEM, GHQuadrature, and GHQuadratureMAP fit results.")
         end
     elseif backend == :profile
         return _compute_uq_profile(res;

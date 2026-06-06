@@ -1574,30 +1574,50 @@ Fit a model to data using the specified estimation method.
 - `theta_0_untransformed::Union{Nothing, ComponentArray} = nothing`: custom starting
   point on the natural scale; defaults to the model's declared initial values.
 - `store_data_model::Bool = true`: whether to store a reference to `dm` in the result.
+- `pooled_init = false`: warm-start the fit from a quick [`Pooled`](@ref) pre-fit.
+  `true` runs `Pooled(optim_kwargs=(; maxiters=50))`; alternatively pass your own
+  `Pooled`/`PooledMap` instance for full control. The pooled pre-fit starts from
+  `theta_0_untransformed` (or the model's initial values) and its estimate becomes the
+  starting point of the actual fit. Inside [`Multistart`](@ref) the pre-fit runs once
+  per start. Requires a model with random effects; not available when `method` itself
+  is `Pooled`/`PooledMap`.
+- `fit_options_pooled_init::NamedTuple = NamedTuple()`: extra keyword arguments for the
+  pooled pre-fit (same keywords as `fit_model`, e.g. `constants`, `penalty`,
+  `serialization`). By default the pre-fit inherits `constants`, `penalty`, `ode_args`,
+  `ode_kwargs`, `serialization`, and `rng` from the main call; entries here override.
 """
-function fit_model(dm::DataModel, method::FittingMethod, args...; store_data_model::Bool=true, kwargs...)
-    return _fit_model(dm, method, args...; store_data_model=store_data_model, kwargs...)
+function fit_model(dm::DataModel, method::FittingMethod, args...;
+                   store_data_model::Bool=true,
+                   pooled_init=false,
+                   fit_options_pooled_init::NamedTuple=NamedTuple(),
+                   kwargs...)
+    if pooled_init === false
+        isempty(fit_options_pooled_init) ||
+            @warn "fit_options_pooled_init is ignored because pooled_init is false."
+        return _fit_model(dm, method, args...; store_data_model=store_data_model, kwargs...)
+    end
+    θ_init = _pooled_init_theta(dm, method, pooled_init, fit_options_pooled_init,
+                                NamedTuple(kwargs))
+    kw = merge(NamedTuple(kwargs), (theta_0_untransformed=θ_init,))
+    return _fit_model(dm, method, args...; store_data_model=store_data_model, kw...)
+end
+
+# Type-stable varying-covariate row construction. Building rows from
+# `Pair{Symbol, Any}` vectors gives every row the abstract type `NamedTuple`, which
+# forces dynamic dispatch at each `calculate_formulas_obs` call site (and breaks
+# Enzyme reverse mode). Going through the NamedTuple structure keeps row types concrete.
+@inline _vary_value_at(v::AbstractVector, idx::Int) = v[idx]
+@inline _vary_value_at(v::NamedTuple, idx::Int) = map(x -> x[idx], v)
+
+@inline function _vary_row(vary::NamedTuple, dyn::NamedTuple, t_obs, idx::Int)
+    t_val = hasproperty(vary, :t) ? vary.t[idx] : t_obs[idx]
+    rest = Base.structdiff(vary, NamedTuple{(:t,)})
+    vals = map(v -> _vary_value_at(v, idx), rest)
+    return merge((t = t_val,), vals, dyn)
 end
 
 function _varying_at(dm::DataModel, ind::Individual, idx::Int, t_obs)
-    pairs = Pair{Symbol, Any}[]
-    vary = ind.series.vary
-    if hasproperty(vary, :t)
-        push!(pairs, :t => getproperty(vary, :t)[idx])
-    else
-        push!(pairs, :t => t_obs[idx])
-    end
-    for name in keys(vary)
-        name == :t && continue
-        v = getfield(vary, name)
-        if v isa AbstractVector
-            push!(pairs, name => v[idx])
-        elseif v isa NamedTuple
-            sub = NamedTuple{keys(v)}(Tuple(getfield(v, k)[idx] for k in keys(v)))
-            push!(pairs, name => sub)
-        end
-    end
-    return merge(NamedTuple(pairs), ind.series.dyn)
+    return _vary_row(ind.series.vary, ind.series.dyn, t_obs, idx)
 end
 
 @inline function _needs_rowwise_random_effects(dm::DataModel, idx::Int; obs_only::Bool=true)
@@ -1664,9 +1684,34 @@ mutable struct _LLCache{H, M, S, A, O, K, P, V, SA}
     saveat_cache::SA
 end
 
+# `_is_hmm_dist` (the 7 HMM-family outcome types) is defined in
+# distributions/outcomes/_HMMSimulationUtils.jl.
+@inline function _row_has_hmm_dist(obs, obs_cols)
+    for col in obs_cols
+        _is_hmm_dist(getproperty(obs, col)) && return true
+    end
+    return false
+end
+
 @inline function _ll_saveat(cache::_LLCache, idx::Int, ind::Individual)
     cache.saveat_cache === nothing && return ind.saveat
     return cache.saveat_cache[idx]
+end
+
+# Function barrier for the per-individual ODE solve. `ind.saveat` and `ind.callbacks`
+# come out of the abstractly-typed `Individual` storage, so building the solve-kwargs
+# NamedTuple at the call site makes it dynamically typed — which keeps the Bool method
+# of `_ode_normalize_verbose` (a genuine type union) reachable and breaks Enzyme's
+# forward mode. Behind the barrier `saveat_use`/`cb` are concrete, the kwargs NamedTuple
+# is concrete, and the Bool branch is statically dead.
+function _ll_ode_solve(cache::_LLCache, prob, cb, saveat_use)
+    solve_kwargs = saveat_use === nothing ?
+        _ode_solve_kwargs(cache.solver_cfg.kwargs, cache.ode_kwargs, (dense=true,)) :
+        _ode_solve_kwargs(cache.solver_cfg.kwargs, cache.ode_kwargs,
+                          (saveat=saveat_use, save_everystep=false, dense=false))
+    return cb === nothing ?
+        solve(prob, cache.alg, cache.ode_args...; solve_kwargs...) :
+        solve(prob, cache.alg, cache.ode_args...; solve_kwargs..., callback=cb)
 end
 
 function _loglikelihood_individual(dm::DataModel, idx::Int, θ, η_ind, cache::_LLCache)
@@ -1714,21 +1759,7 @@ function _loglikelihood_individual(dm::DataModel, idx::Int, θ, η_ind, cache::_
         u0_T = eltype(u0) === T ? u0 : T.(u0)
         prob = remake(prob; u0 = u0_T, p = compiled)
         saveat_use = _ll_saveat(cache, idx, ind)
-        sol = if saveat_use === nothing
-            solve_kwargs = _ode_solve_kwargs(cache.solver_cfg.kwargs,
-                                             cache.ode_kwargs,
-                                             (dense=true,))
-            cb === nothing ?
-                solve(prob, cache.alg, cache.ode_args...; solve_kwargs...) :
-                solve(prob, cache.alg, cache.ode_args...; solve_kwargs..., callback=cb)
-        else
-            solve_kwargs = _ode_solve_kwargs(cache.solver_cfg.kwargs,
-                                             cache.ode_kwargs,
-                                             (saveat=saveat_use, save_everystep=false, dense=false))
-            cb === nothing ?
-                solve(prob, cache.alg, cache.ode_args...; solve_kwargs...) :
-                solve(prob, cache.alg, cache.ode_args...; solve_kwargs..., callback=cb)
-        end
+        sol = _ll_ode_solve(cache, prob, cb, saveat_use)
         SciMLBase.successful_retcode(sol) || return -Inf
         sol_accessors = get_de_accessors_builder(model.de.de)(sol, compiled)
     end
@@ -1737,38 +1768,78 @@ function _loglikelihood_individual(dm::DataModel, idx::Int, θ, η_ind, cache::_
     ll = zero(T_el)
     obs_cols = dm.config.obs_cols
     rowwise_re = _needs_rowwise_random_effects(dm, idx; obs_only=true)
-    hmm_priors = nothing  # lazily initialised on first HMM observation to avoid Dict alloc for non-HMM models
-    hmm_seen = nothing
-    hmm_init = nothing
-    T_hmm = T_el
+    # HMM-free fast path. Filtering state created lazily inside this loop would be
+    # loop-carried (phi nodes reverse-mode Enzyme cannot invert), so rows are processed
+    # assuming no HMM outcome; the first row that produces one hands all remaining rows
+    # to `_loglikelihood_rows_hmm`, which allocates its state once up front. Non-HMM
+    # models never allocate any filtering state.
     for i in eachindex(obs_rows)
         vary = vary_cache === nothing ? _varying_at(dm, ind, i, _get_col(dm.df, dm.config.time_col)[obs_rows]) : vary_cache[i]
         η_row = _row_random_effects_at(dm, idx, i, η_ind, rowwise_re; obs_only=true)
         obs = sol_accessors === nothing ?
               calculate_formulas_obs(model, θ, η_row, const_cov, vary) :
               calculate_formulas_obs(model, θ, η_row, const_cov, vary, sol_accessors)
-        for (j, col) in pairs(obs_cols)
+        if _row_has_hmm_dist(obs, obs_cols)
+            ll_hmm = _loglikelihood_rows_hmm(dm, idx, θ, η_ind, cache, sol_accessors, i)
+            isfinite(ll_hmm) || return -Inf
+            return ll + ll_hmm
+        end
+        for col in obs_cols
+            y = getfield(obs_series, col)[i]
+            y === missing && continue
+            dist = getproperty(obs, col)
+            v = _fast_logpdf(dist, y)
+            v === nothing && (v = logpdf(dist, y))
+            if !isfinite(v)
+                return -Inf
+            end
+            ll += v
+        end
+    end
+    return ll
+end
+
+# HMM-capable continuation of `_loglikelihood_individual`, entered at the first row
+# whose formulas produce an HMM-family outcome distribution. Forward-filtering state is
+# allocated once up front (assigned-once slots — no loop-carried phi nodes) and the
+# per-column prior store is positional instead of a `Dict{Symbol, Any}`: both keep the
+# function reverse-mode-AD-friendly and avoid hashing on the HMM hot path.
+function _loglikelihood_rows_hmm(dm::DataModel, idx::Int, θ, η_ind, cache::_LLCache,
+                                 sol_accessors, i_start::Int)
+    model = dm.model
+    ind = dm.individuals[idx]
+    obs_rows = dm.row_groups.obs_rows[idx]
+    const_cov = ind.const_cov
+    obs_series = ind.series.obs
+    vary_cache = cache.vary_cache === nothing ? nothing : cache.vary_cache[idx]
+    obs_cols = dm.config.obs_cols
+    rowwise_re = _needs_rowwise_random_effects(dm, idx; obs_only=true)
+    T_hmm = promote_type(eltype(θ), eltype(η_ind))
+    n_cols = length(obs_cols)
+    hmm_seen = falses(n_cols)
+    hmm_init = Vector{Vector{T_hmm}}(undef, n_cols)
+    hmm_has_prior = falses(n_cols)
+    hmm_priors = Vector{Vector{T_hmm}}(undef, n_cols)
+    ll = zero(T_hmm)
+    for i in i_start:length(obs_rows)
+        vary = vary_cache === nothing ? _varying_at(dm, ind, i, _get_col(dm.df, dm.config.time_col)[obs_rows]) : vary_cache[i]
+        η_row = _row_random_effects_at(dm, idx, i, η_ind, rowwise_re; obs_only=true)
+        obs = sol_accessors === nothing ?
+              calculate_formulas_obs(model, θ, η_row, const_cov, vary) :
+              calculate_formulas_obs(model, θ, η_row, const_cov, vary, sol_accessors)
+        for (j, col) in Base.pairs(obs_cols)
             y = getfield(obs_series, col)[i]
             dist = getproperty(obs, col)
-            if dist isa ContinuousTimeDiscreteStatesHMM || dist isa DiscreteTimeDiscreteStatesHMM ||
-               dist isa MVContinuousTimeDiscreteStatesHMM || dist isa MVDiscreteTimeDiscreteStatesHMM ||
-               dist isa DiscreteTimeObservedStatesMarkovModel || dist isa ContinuousTimeObservedStatesMarkovModel ||
-               dist isa CoarsedObservedStatesMarkovModel
-                if hmm_seen === nothing
-                    hmm_init = Vector{Vector{T_hmm}}(undef, length(obs_cols))
-                    hmm_seen = falses(length(obs_cols))
-                end
-                hs = hmm_seen::BitVector
-                hi = hmm_init::Vector{Vector{T_hmm}}
-                if !hs[j]
+            if _is_hmm_dist(dist)
+                if !hmm_seen[j]
                     init_probs = dist isa CoarsedObservedStatesMarkovModel ?
                                  dist.base_dist.initial_dist.p : dist.initial_dist.p
                     buf = Vector{T_hmm}(undef, length(init_probs))
                     copyto!(buf, init_probs)
-                    hi[j] = buf
-                    hs[j] = true
+                    hmm_init[j] = buf
+                    hmm_seen[j] = true
                 end
-                init_p = hi[j]
+                init_p = hmm_init[j]
                 # Use check_args=false so that degenerate posteriors (NaN/Inf from
                 # zero-probability observations at extreme parameter values) do not
                 # throw a DomainError.  The isfinite guard below catches NaN logpdf.
@@ -1814,10 +1885,7 @@ function _loglikelihood_individual(dm::DataModel, idx::Int, θ, η_ind, cache::_
                     DiscreteTimeDiscreteStatesHMM(dist.transition_matrix, dist.emission_dists,
                                                   Distributions.Categorical(init_p; check_args=false))
                 end
-                if hmm_priors === nothing
-                    hmm_priors = Dict{Symbol, Any}()
-                end
-                prior = get(hmm_priors::Dict{Symbol, Any}, col, nothing)
+                prior = hmm_has_prior[j] ? hmm_priors[j] : nothing
                 dist_use = try
                     _hmm_with_prior(dist_up, prior)
                 catch err
@@ -1827,7 +1895,7 @@ function _loglikelihood_individual(dm::DataModel, idx::Int, θ, η_ind, cache::_
                     rethrow(err)
                 end
                 if y === missing
-                    (hmm_priors::Dict{Symbol, Any})[col] = try
+                    hmm_priors[j] = try
                         probabilities_hidden_states(dist_use)
                     catch err
                         if err isa DomainError || err isa ArgumentError
@@ -1835,6 +1903,7 @@ function _loglikelihood_individual(dm::DataModel, idx::Int, θ, η_ind, cache::_
                         end
                         rethrow(err)
                     end
+                    hmm_has_prior[j] = true
                     continue
                 end
                 v = try
@@ -1848,7 +1917,7 @@ function _loglikelihood_individual(dm::DataModel, idx::Int, θ, η_ind, cache::_
                 if !isfinite(v)
                     return -Inf
                 end
-                (hmm_priors::Dict{Symbol, Any})[col] = try
+                hmm_priors[j] = try
                     posterior_hidden_states(dist_use, y)
                 catch err
                     if err isa DomainError || err isa ArgumentError
@@ -1856,6 +1925,7 @@ function _loglikelihood_individual(dm::DataModel, idx::Int, θ, η_ind, cache::_
                     end
                     rethrow(err)
                 end
+                hmm_has_prior[j] = true
             else
                 y === missing && continue
                 v = _fast_logpdf(dist, y)
@@ -1912,21 +1982,7 @@ function _resid_stats_individual(dm::DataModel, idx::Int, θ, η_ind, cache::_LL
         u0_T = eltype(u0) === T ? u0 : T.(u0)
         prob = remake(prob; u0 = u0_T, p = compiled)
         saveat_use = _ll_saveat(cache, idx, ind)
-        sol = if saveat_use === nothing
-            solve_kwargs = _ode_solve_kwargs(cache.solver_cfg.kwargs,
-                                             cache.ode_kwargs,
-                                             (dense=true,))
-            cb === nothing ?
-                solve(prob, cache.alg, cache.ode_args...; solve_kwargs...) :
-                solve(prob, cache.alg, cache.ode_args...; solve_kwargs..., callback=cb)
-        else
-            solve_kwargs = _ode_solve_kwargs(cache.solver_cfg.kwargs,
-                                             cache.ode_kwargs,
-                                             (saveat=saveat_use, save_everystep=false, dense=false))
-            cb === nothing ?
-                solve(prob, cache.alg, cache.ode_args...; solve_kwargs...) :
-                solve(prob, cache.alg, cache.ode_args...; solve_kwargs..., callback=cb)
-        end
+        sol = _ll_ode_solve(cache, prob, cb, saveat_use)
         SciMLBase.successful_retcode(sol) || return (zero(promote_type(eltype(θ), Float64)), 0, false)
         sol_accessors = get_de_accessors_builder(model.de.de)(sol, compiled)
     end
@@ -1997,21 +2053,7 @@ function _resid_stats_individual_cols(dm::DataModel, idx::Int, θ, η_ind, cache
         u0_T = eltype(u0) === T ? u0 : T.(u0)
         prob = remake(prob; u0 = u0_T, p = compiled)
         saveat_use = _ll_saveat(cache, idx, ind)
-        sol = if saveat_use === nothing
-            solve_kwargs = _ode_solve_kwargs(cache.solver_cfg.kwargs,
-                                             cache.ode_kwargs,
-                                             (dense=true,))
-            cb === nothing ?
-                solve(prob, cache.alg, cache.ode_args...; solve_kwargs...) :
-                solve(prob, cache.alg, cache.ode_args...; solve_kwargs..., callback=cb)
-        else
-            solve_kwargs = _ode_solve_kwargs(cache.solver_cfg.kwargs,
-                                             cache.ode_kwargs,
-                                             (saveat=saveat_use, save_everystep=false, dense=false))
-            cb === nothing ?
-                solve(prob, cache.alg, cache.ode_args...; solve_kwargs...) :
-                solve(prob, cache.alg, cache.ode_args...; solve_kwargs..., callback=cb)
-        end
+        sol = _ll_ode_solve(cache, prob, cb, saveat_use)
         SciMLBase.successful_retcode(sol) || return (zeros(promote_type(eltype(θ), Float64), length(dm.config.obs_cols)),
                                                      zeros(Int, length(dm.config.obs_cols)),
                                                      false)
@@ -2076,38 +2118,22 @@ end
 
 @inline _fast_logpdf(::Any, ::Any) = nothing
 
+# Function barrier: `dm.individuals` has abstract eltype, so `vary`/`dyn` are only
+# concretely typed once they cross this call. Inside, the comprehension infers a
+# concrete row type, giving each individual a `Vector{<concrete NamedTuple>}`.
+function _build_vary_cache_individual(vary::NamedTuple, dyn::NamedTuple, t_obs,
+                                      n_rows::Int)
+    return [_vary_row(vary, dyn, t_obs, j) for j in 1:n_rows]
+end
+
 function _build_vary_cache(dm::DataModel)
-    n = length(dm.individuals)
-    caches = Vector{Vector{NamedTuple}}(undef, n)
-    for i in 1:n
+    return map(eachindex(dm.individuals)) do i
         ind = dm.individuals[i]
         obs_rows = dm.row_groups.obs_rows[i]
         t_obs = _get_col(dm.df, dm.config.time_col)[obs_rows]
-        vary = ind.series.vary
-        dyn = ind.series.dyn
-        cache_i = Vector{NamedTuple}(undef, length(obs_rows))
-        for j in eachindex(obs_rows)
-            pairs = Pair{Symbol, Any}[]
-            if hasproperty(vary, :t)
-                push!(pairs, :t => getproperty(vary, :t)[j])
-            else
-                push!(pairs, :t => t_obs[j])
-            end
-            for name in keys(vary)
-                name == :t && continue
-                v = getfield(vary, name)
-                if v isa AbstractVector
-                    push!(pairs, name => v[j])
-                elseif v isa NamedTuple
-                    sub = NamedTuple{keys(v)}(Tuple(getfield(v, k)[j] for k in keys(v)))
-                    push!(pairs, name => sub)
-                end
-            end
-            cache_i[j] = merge(NamedTuple(pairs), dyn)
-        end
-        caches[i] = cache_i
+        _build_vary_cache_individual(ind.series.vary, ind.series.dyn, t_obs,
+                                     length(obs_rows))
     end
-    return caches
 end
 
 function build_ll_cache(dm::DataModel;

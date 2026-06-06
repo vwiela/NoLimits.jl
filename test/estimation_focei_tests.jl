@@ -136,6 +136,56 @@ end
     @test NL.get_converged(rf) isa Bool
 end
 
+@testset "FOCEI Wald UQ matches Laplace (linear-Gaussian)" begin
+    model = @Model begin
+        @fixedEffects begin
+            a = RealNumber(0.5)
+            σ = RealNumber(0.4, scale=:log, lower=1e-8, upper=Inf)
+            ω = RealNumber(0.4, scale=:log, lower=1e-8, upper=Inf)
+        end
+        @covariates begin
+            t = Covariate()
+        end
+        @randomEffects begin
+            η = RandomEffect(Normal(0.0, ω); column=:ID)
+        end
+        @formulas begin
+            y ~ Normal(a + η, σ)
+        end
+    end
+
+    Random.seed!(42)
+    rows = NamedTuple[]
+    for i in 1:30
+        ηi = 0.5 * randn()
+        for j in 1:5
+            push!(rows, (ID=i, t=float(j-1), y=1.0 + ηi + 0.3 * randn()))
+        end
+    end
+    df = DataFrame(rows)
+    dm = DataModel(model, df; primary_id=:ID, time_col=:t)
+
+    rf = fit_model(dm, NL.FOCEI(multistart_n=1, multistart_k=1); serialization=NL.EnsembleSerial())
+    rl = fit_model(dm, NL.Laplace(multistart_n=1, multistart_k=1); serialization=NL.EnsembleSerial())
+
+    uq_f = compute_uq(rf; n_draws=200, serialization=NL.EnsembleSerial())
+    uq_l = compute_uq(rl; n_draws=200, serialization=NL.EnsembleSerial())
+
+    @test NL.get_uq_backend(uq_f) == :wald
+    @test NL.get_uq_source_method(uq_f) == :focei
+    @test NL.get_uq_diagnostics(uq_f).approximation_method == :focei
+
+    # Gaussian outcome: the FOCEI Fisher-information Hessian equals the exact inner
+    # Hessian, so Wald SEs must match the Laplace ones.
+    se_f = sqrt.(diag(NL.get_uq_vcov(uq_f; scale=:transformed)))
+    se_l = sqrt.(diag(NL.get_uq_vcov(uq_l; scale=:transformed)))
+    @test se_f ≈ se_l rtol = 5e-2
+
+    # intervals on natural scale exist for all three parameters
+    @test NL.get_uq_intervals(uq_f; scale=:natural) !== nothing
+    @test length(NL.get_uq_parameter_names(uq_f; scale=:transformed)) == 3
+end
+
 @testset "FOCE freezes dispersion at the random-effects prior mean" begin
     a0, c0, γ0, μη0, ω0, b1 = 1.0, -0.3, 0.8, 0.3, 0.6, 1.0
     model = @Model begin
@@ -344,4 +394,39 @@ end
     @test isfinite(NL.get_objective(res))
     @test res.result.eb_modes !== nothing
     @test NL.get_random_effects(res) isa NamedTuple
+end
+
+@testset "FOCEI Hessian catches numeric failures (backtracks, no crash)" begin
+    # σ = sqrt(c + η) throws a DomainError when η < -c; the FOCEI Hessian builder must
+    # convert that to a NaN Hessian (→ -Inf marginal → optimiser backtracks), mirroring
+    # the robustness of _laplace_logf_batch, rather than crashing the fit.
+    model = @Model begin
+        @fixedEffects begin
+            a = RealNumber(0.5)
+            c = RealNumber(0.4)
+            ω = RealNumber(0.5, scale=:log, lower=1e-8, upper=Inf)
+        end
+        @covariates begin
+            t = Covariate()
+        end
+        @randomEffects begin
+            η = RandomEffect(Normal(0.0, ω); column=:ID)
+        end
+        @formulas begin
+            y ~ Normal(a + η, sqrt(c + η))
+        end
+    end
+    Random.seed!(11)
+    df = DataFrame(ID=repeat(1:6, inner=3), t=repeat(0:2, 6), y=randn(18) .* 0.3 .+ 0.5)
+    dm = DataModel(model, df; primary_id=:ID, time_col=:t)
+    _, batch_infos, const_cache = NL._build_laplace_batch_infos(dm, NamedTuple())
+    ll_cache = NL.build_ll_cache(dm; force_saveat=true)
+    θu = NL.get_θ0_untransformed(dm.model.fixed.fixed)
+    info = batch_infos[1]
+    @test all(isfinite, NL._focei_negH_batch(dm, info, θu, [0.0], const_cache, ll_cache; interaction=true))
+    # Must NOT throw at the invalid point — returns NaN so the caller backtracks.
+    @test all(isnan, NL._focei_negH_batch(dm, info, θu, [-1.0], const_cache, ll_cache; interaction=true))
+    # A full fit must complete (the optimiser may probe the invalid region).
+    res = fit_model(dm, NL.FOCEI(multistart_n=1, multistart_k=1, optim_kwargs=(maxiters=10,)); serialization=NL.EnsembleSerial())
+    @test isfinite(NL.get_objective(res))
 end

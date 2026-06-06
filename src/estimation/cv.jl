@@ -406,6 +406,14 @@ function _cv_prior_mean_eta(dm, j, θu, dists_builder, model_funs, helpers, re_n
     return ComponentArray(nt)
 end
 
+# Pooled path: every test individual — seen or unseen — gets the deterministic
+# plug-in η evaluated from their own covariates with the strategies resolved by
+# the training fit (replays demotions and fixed Monte-Carlo draws exactly).
+function _cv_evaluate_pooled(dm_test, res_train, θu, ll_cache_test, loss)
+    η_test = _compute_pooled_etas(dm_test, θu, res_train.result.strategies)
+    return _cv_collect_obs(dm_test, θu, η_test, ll_cache_test, loss)
+end
+
 # EBE path: pre-build η for each test individual (seen → training EBE,
 # unseen → RE prior mean).
 function _cv_evaluate_ebe(dm_train, dm_test, res_train, θu, ll_cache_test, loss,
@@ -598,6 +606,11 @@ performance on the held-out test set. All `kwargs` are forwarded to
   to evaluate folds concurrently.
 - `constants_re`: fix specific RE levels on the natural scale.
 
+[`Pooled`](@ref)/[`PooledMap`](@ref) fits evaluate every test individual — seen or
+unseen — at the deterministic plug-in η computed from that individual's covariates
+with the strategies resolved by the training fit; `seen_re_mode`/`unseen_re_mode`
+do not apply and must be left at their defaults.
+
 Returns a [`CVResult`](@ref).
 """
 function fit_cv(cv_spec::CVSpec, method::FittingMethod, args...;
@@ -616,6 +629,11 @@ function fit_cv(cv_spec::CVSpec, method::FittingMethod, args...;
         error("seen_re_mode must be :ebe or :conditional, got $seen_re_mode")
     unseen_re_mode ∈ (:mean, :montecarlo) ||
         error("unseen_re_mode must be :mean or :montecarlo, got $unseen_re_mode")
+    if method isa Pooled || method isa PooledMap
+        (seen_re_mode == :ebe && unseen_re_mode == :mean) ||
+            error("Pooled/PooledMap cross-validation evaluates the deterministic plug-in " *
+                  "η for every test individual; seen_re_mode/unseen_re_mode do not apply.")
+    end
 
     n_folds  = cv_spec.n_folds
     dm_ref   = cv_spec.dm
@@ -639,8 +657,13 @@ function fit_cv(cv_spec::CVSpec, method::FittingMethod, args...;
 
         cr = _res_constants_re(res_train, constants_re)
 
-        obs_df = if !has_re || !_cv_has_re_support(res_train)
-            # No RE or method without EBE support (e.g. MCMC) → evaluate at zero RE
+        obs_df = if !has_re
+            _cv_collect_obs(dm_test, θu, nothing, ll_cache_test, loss)
+        elseif res_train.result isa PooledResult
+            # Pooled/PooledMap: plug-in η from each test individual's covariates
+            _cv_evaluate_pooled(dm_test, res_train, θu, ll_cache_test, loss)
+        elseif !_cv_has_re_support(res_train)
+            # Method without EBE support (e.g. MCMC) → evaluate at zero RE
             _cv_collect_obs(dm_test, θu, nothing, ll_cache_test, loss)
         elseif seen_re_mode == :ebe && unseen_re_mode == :mean
             _cv_evaluate_ebe(dm_train, dm_test, res_train, θu, ll_cache_test, loss, cr)

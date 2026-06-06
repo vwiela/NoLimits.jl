@@ -3,6 +3,7 @@ export hessian_fwd_over_zygote
 export build_ode_params
 export flatten_re_names
 export flatten_re_values
+export rowsoftmax
 
 using ForwardDiff
 using Zygote
@@ -10,6 +11,26 @@ import DiffEqBase
 
 function dir(x)
     return fieldnames(typeof(x))
+end
+
+"""
+    rowsoftmax(L::AbstractMatrix) -> AbstractMatrix
+
+Row-wise softmax. Returns a row-stochastic matrix whose `i`-th row is the softmax of
+`L[i, :]`, that is `P[i, j] = exp(L[i, j]) / sum_k exp(L[i, k])`, so every row sums to
+one.
+
+This is meant for use inside an `@formulas` block to turn a matrix of unnormalized
+transition logits (for example the reshaped output of a neural network, optionally
+shifted by random or covariate effects) into a valid transition matrix in one call,
+replacing a hand-written exponentiate-and-normalize construction. Each row's maximum is
+subtracted before exponentiating for numerical stability, which leaves the result
+unchanged, and the function is automatic-differentiation safe.
+"""
+function rowsoftmax(L::AbstractMatrix)
+    m = maximum(L; dims = 2)
+    E = exp.(L .- m)
+    return E ./ sum(E; dims = 2)
 end
 
 # OrdinaryDiffEq / DiffEqBase v7 no longer accept a `Bool` for the solver `verbose`
@@ -70,11 +91,18 @@ end
     end
 end
 
+# Translate any `Bool` verbose (the v6 default, or user-supplied via ode_kwargs) into
+# the value the installed solver accepts. A verbosity object passes through unchanged.
+# Dispatch instead of an `isa Bool` branch: the branch makes the return type a Union of
+# two NamedTuple types, which survives into LLVM and breaks Enzyme forward mode
+# (invalid phi node); dispatch resolves to a single concrete return type per input.
+@inline _ode_normalize_verbose(kw::NamedTuple, v::Bool) =
+    merge(kw, (verbose = _ode_verbose(v),))
+@inline _ode_normalize_verbose(kw::NamedTuple, v) = kw
+
 @inline function _ode_solve_kwargs(base::NamedTuple,
                                    extra::NamedTuple=NamedTuple(),
                                    overrides::NamedTuple=NamedTuple())
     merged = merge((verbose=_ODE_VERBOSE_SILENT,), base, extra, overrides)
-    # Translate any `Bool` verbose (the v6 default, or user-supplied via ode_kwargs) into
-    # the value the installed solver accepts. A verbosity object passes through unchanged.
-    return merged.verbose isa Bool ? merge(merged, (verbose=_ode_verbose(merged.verbose),)) : merged
+    return _ode_normalize_verbose(merged, merged.verbose)
 end

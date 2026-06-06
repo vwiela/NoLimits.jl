@@ -8,7 +8,9 @@ end
 function _resolve_wald_re_approx_method(source_method::FittingMethod;
                                         re_approx::Symbol,
                                         re_approx_method::Union{Nothing, FittingMethod})
-    if _is_re_laplace_family(source_method) || source_method isa GHQuadrature || source_method isa GHQuadratureMAP
+    if _is_re_laplace_family(source_method) || source_method isa GHQuadrature ||
+       source_method isa GHQuadratureMAP ||
+       source_method isa FOCEI || source_method isa FOCEIMAP
         re_approx == :auto ||
             error("re_approx is only used for MCEM/SAEM Wald UQ results.")
         re_approx_method === nothing ||
@@ -17,7 +19,7 @@ function _resolve_wald_re_approx_method(source_method::FittingMethod;
     end
 
     if !(source_method isa MCEM || source_method isa SAEM)
-        error("Wald UQ for random-effects models currently supports Laplace, LaplaceMAP, MCEM, SAEM, GHQuadrature, and GHQuadratureMAP.")
+        error("Wald UQ for random-effects models currently supports Laplace, LaplaceMAP, FOCEI, FOCEIMAP, MCEM, SAEM, GHQuadrature, and GHQuadratureMAP.")
     end
 
     if re_approx_method !== nothing
@@ -51,7 +53,16 @@ function _compute_uq_wald_no_re(res::FitResult;
     dm = get_data_model(res)
     dm === nothing && error("This fit result does not store a DataModel; pass store_data_model=true when fitting.")
     method = get_method(res)
-    (method isa MLE || method isa MAP) || error("Wald UQ is currently supported for MLE and MAP fits in this rollout.")
+    is_pooled = method isa Pooled || method isa PooledMap
+    (method isa MLE || method isa MAP || is_pooled) ||
+        error("This Wald path supports MLE, MAP, Pooled, and PooledMap fits.")
+    if is_pooled
+        wk = get_notes(res).weakly_identified
+        isempty(wk) ||
+            @warn "Pooled Wald UQ: weakly identified parameter(s) $(join(wk, ", ")) may " *
+                  "produce a near-singular Hessian. Consider pseudo_inverse=true or " *
+                  "fixing them via constants."
+    end
 
     constants_use = constants === nothing ? _fit_kw(res, :constants, NamedTuple()) : constants
     penalty_use = penalty === nothing ? _fit_kw(res, :penalty, NamedTuple()) : penalty
@@ -89,7 +100,14 @@ function _compute_uq_wald_no_re(res::FitResult;
     xhat_active = xhat_full[active_idx]
     ll_cache = _build_ll_cache_uq(dm, ode_args_use, ode_kwargs_use, serialization_use)
     use_penalty = !isempty(keys(penalty_use))
-    use_prior = method isa MAP
+    use_prior = method isa MAP || method isa PooledMap
+    # Pooled: η is the plug-in value of the RE distributions — a function of θ that
+    # must be recomputed inside the objective so the Hessian carries the chain rule.
+    pooled_strategies = is_pooled ? res.result.strategies : nothing
+    eta_for = function (θu)
+        is_pooled || return ComponentArray()
+        return _compute_pooled_etas(dm, θu, pooled_strategies)
+    end
 
     function _θu_from_active(x_active::AbstractVector)
         T = eltype(x_active)
@@ -106,7 +124,12 @@ function _compute_uq_wald_no_re(res::FitResult;
 
     function obj_active(x_active::AbstractVector)
         θu = _θu_from_active(x_active)
-        ll = loglikelihood(dm, θu, ComponentArray(); cache=ll_cache, serialization=serialization_use)
+        η = try
+            eta_for(θu)
+        catch
+            return Inf
+        end
+        ll = loglikelihood(dm, θu, η; cache=ll_cache, serialization=serialization_use)
         ll == -Inf && return Inf
 
         obj = -ll
@@ -143,7 +166,13 @@ function _compute_uq_wald_no_re(res::FitResult;
         for i in eachindex(dm.individuals)
             obj_i = function (x_active::AbstractVector)
                 θu = _θu_from_active(x_active)
-                ll_i = _loglikelihood_individual(dm, i, θu, ComponentArray(), ll_cache_local)
+                η = try
+                    eta_for(θu)
+                catch
+                    return Inf
+                end
+                η_i = η isa AbstractVector ? η[i] : η
+                ll_i = _loglikelihood_individual(dm, i, θu, η_i, ll_cache_local)
                 ll_i == -Inf && return Inf
                 return Float64(-ll_i)
             end
@@ -278,7 +307,12 @@ function _compute_uq_wald_re(res::FitResult;
     ebe_cache = _init_laplace_eval_cache(length(batch_infos), Float64)
     cache_opts = LaplaceCacheOptions(0.0)
     use_penalty = !isempty(keys(penalty_use))
-    use_prior = approx_method isa LaplaceMAP || approx_method isa GHQuadratureMAP
+    use_prior = approx_method isa LaplaceMAP || approx_method isa GHQuadratureMAP ||
+                approx_method isa FOCEIMAP
+    # FOCEI/FOCEIMAP: differentiate the same Fisher-information Laplace objective the
+    # optimizer minimized (NONMEM-style FOCEI vcov); otherwise exact inner Hessian.
+    hmode_use = (approx_method isa FOCEI || approx_method isa FOCEIMAP) ?
+                _FOCEIHess(approx_method.interaction) : _ExactHess()
     seed = rand(rng, UInt64)
 
     function _θu_from_active(x_active::AbstractVector)
@@ -315,7 +349,8 @@ function _compute_uq_wald_re(res::FitResult;
                                     cache_opts=cache_opts,
                                     multistart=approx_method.multistart,
                                     rng=Random.Xoshiro(seed),
-                                    serialization=serialization_use)
+                                    serialization=serialization_use,
+                                    hmode=hmode_use)
         end
         obj == Inf && return Inf
 
@@ -374,7 +409,8 @@ function _compute_uq_wald_re(res::FitResult;
                                             cache_opts=cache_opts,
                                             multistart=approx_method.multistart,
                                             rng=Random.Xoshiro(seed_i),
-                                            serialization=serialization_use)
+                                            serialization=serialization_use,
+                                            hmode=hmode_use)
                 end
                 return obj_bi == Inf ? Inf : Float64(obj_bi)
             end
