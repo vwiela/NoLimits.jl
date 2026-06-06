@@ -395,8 +395,27 @@ function _focei_data_term(J, dists_b::Vector, dists_m, interaction::Bool, T::Typ
     return sum(terms)
 end
 
+# Robustness wrapper (mirrors `_laplace_logf_batch`): an ODE solve or distribution
+# construction that throws on an unstable parameter region the optimiser steps into
+# (e.g. a negative state driving a fractional power, or a negative scale) is turned into
+# a NaN Hessian. That makes the Cholesky/log-det fail and the marginal -Inf, so the outer
+# optimiser backtracks instead of crashing the whole fit — matching Laplace's behaviour.
 function _focei_negH_batch(dm::DataModel, batch_info::_LaplaceBatchInfo, θ, b,
                            const_cache::LaplaceConstantsCache, cache::_LLCache; interaction::Bool)
+    try
+        return _focei_negH_batch_impl(dm, batch_info, θ, b, const_cache, cache; interaction=interaction)
+    catch err
+        if err isa LinearAlgebra.PosDefException || err isa LinearAlgebra.SingularException ||
+           err isa DomainError || err isa ArgumentError
+            nb = batch_info.n_b
+            return fill(convert(promote_type(eltype(θ), eltype(b)), NaN), nb, nb)
+        end
+        rethrow(err)
+    end
+end
+
+function _focei_negH_batch_impl(dm::DataModel, batch_info::_LaplaceBatchInfo, θ, b,
+                                const_cache::LaplaceConstantsCache, cache::_LLCache; interaction::Bool)
     θ_re = _symmetrize_psd_params(θ, dm.model.fixed.fixed)
     nb = batch_info.n_b
     T = promote_type(eltype(θ_re), eltype(b))
