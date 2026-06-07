@@ -120,7 +120,12 @@ const TEST_FILES = [
     ("coverage_gap_tests.jl",                    160),]
 
 const _RAW_GROUP  = get(ENV, "TEST_GROUP", "all")
-const _TARGET     = (_RAW_GROUP == "all" || _RAW_GROUP == "0") ? nothing : parse(Int, _RAW_GROUP)
+# "none" runs zero files: used by the CI `prepare` job, which calls Pkg.test only
+# to precompile + cache the test environment (Pkg.test precompiles before running
+# runtests.jl, so the cache is seeded even though no test file is included).
+const _TARGET     = (_RAW_GROUP == "all" || _RAW_GROUP == "0") ? nothing :
+                    _RAW_GROUP == "none" ? -1 :
+                    parse(Int, _RAW_GROUP)
 const _NGROUPS    = parse(Int, get(ENV, "TEST_GROUPS", "8"))
 
 # integration_* files share fixtures and must stay together, in order.

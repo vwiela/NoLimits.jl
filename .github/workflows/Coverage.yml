@@ -1,10 +1,11 @@
 name: Coverage
 
-# Coverage instrumentation is ~4x slower than a plain test run, so it is kept
-# OUT of the PR gate (CI.yml) and runs here instead: on pushes to main and on
-# demand. Each shard uploads its lcov.info to Codecov, which merges the per-shard
-# uploads (same commit SHA) into one combined report. This workflow does not gate
-# pull requests.
+# Coverage instrumentation (--code-coverage) is ~4x slower than a plain test run
+# and is its own compile configuration, so it is kept OUT of the PR gate (CI.yml)
+# and runs here: on pushes to main and on demand. A `prepare-coverage` job seeds
+# the coverage-config precompile cache once; the shards restore it and run. Each
+# shard uploads its lcov.info to Codecov, which merges the per-shard uploads
+# (same commit SHA) into one report. This workflow does not gate pull requests.
 
 on:
   push:
@@ -16,10 +17,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  prepare-coverage:
+    name: prepare coverage (precompile + seed cache)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: "1.12"
+      - uses: julia-actions/cache@v2
+        with:
+          cache-name: julia-cov
+      - uses: julia-actions/julia-buildpkg@v1
+      - name: Precompile test environment (coverage config)
+        run: julia --color=yes --project=. -e 'using Pkg; Pkg.test(; coverage=true, julia_args=["--check-bounds=auto"])'
+        env:
+          TEST_GROUP: "none"
+          TEST_GROUPS: "10"
+
   coverage:
     name: coverage - shard ${{ matrix.group }}/10
+    needs: prepare-coverage
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -30,10 +51,9 @@ jobs:
         with:
           version: "1.12"
       - uses: julia-actions/cache@v2
+        with:
+          cache-name: julia-cov
       - uses: julia-actions/julia-buildpkg@v1
-      # --code-coverage is its own compile config (recompiles regardless), hence
-      # the generous timeout; --check-bounds=auto still avoids stacking a second
-      # mismatch on top of it.
       - name: Run tests (coverage)
         run: julia --color=yes --project=. -e 'using Pkg; Pkg.test(; coverage=true, julia_args=["--check-bounds=auto"])'
         env:

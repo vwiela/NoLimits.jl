@@ -10,12 +10,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Fast PR gate: sharded tests WITHOUT coverage. Coverage instrumentation is
-  # ~4x slower and lives in a separate, non-blocking workflow (coverage.yml).
-  test:
-    name: test ubuntu - shard ${{ matrix.group }}/8
+  # Precompile the test environment ONCE and seed julia-actions/cache, so the
+  # shard jobs restore a warm depot instead of each paying the ~25-min cold
+  # precompile. `TEST_GROUP=none` runs zero test files — Pkg.test still
+  # precompiles the env before invoking runtests.jl, which is all we need here.
+  # Uses --check-bounds=auto so the cached precompile matches what the shards run
+  # (Pkg.test's default --check-bounds=yes is a different config and would force
+  # a full recompile).
+  prepare:
+    name: prepare (precompile + seed cache)
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: "1.12"
+      - uses: julia-actions/cache@v2
+      - uses: julia-actions/julia-buildpkg@v1
+      - name: Precompile test environment
+        run: julia --color=yes --project=. -e 'using Pkg; Pkg.test(; julia_args=["--check-bounds=auto"])'
+        env:
+          TEST_GROUP: "none"
+          TEST_GROUPS: "8"
+
+  # Fast PR gate: 8 sharded test jobs WITHOUT coverage, restoring the warm cache
+  # seeded by `prepare`. Coverage is ~4x slower and runs in a separate,
+  # non-blocking workflow (Coverage.yml).
+  test:
+    name: test ubuntu - shard ${{ matrix.group }}/8
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -27,10 +53,6 @@ jobs:
           version: "1.12"
       - uses: julia-actions/cache@v2
       - uses: julia-actions/julia-buildpkg@v1
-      # NB: `Pkg.test()` defaults to --check-bounds=yes, a DIFFERENT compile
-      # configuration than buildpkg's cached precompile, which forces a ~20-min
-      # recompile of the whole dependency tree on every shard. --check-bounds=auto
-      # reuses the restored cache, so the per-shard precompile drops to ~0.
       - name: Run tests (no coverage)
         run: julia --color=yes --project=. -e 'using Pkg; Pkg.test(; julia_args=["--check-bounds=auto"])'
         env:
@@ -38,12 +60,32 @@ jobs:
           TEST_GROUPS: "8"
 
   # macOS runners are slow + expensive; run them only on pushes to main as a
-  # platform-sanity check (no coverage), not on every PR.
-  test-macos:
-    name: test macos - shard ${{ matrix.group }}/8
+  # platform-sanity check (no coverage). Own prepare (the macOS cache key differs
+  # from the Linux one).
+  prepare-macos:
+    name: prepare macos (precompile + seed cache)
     runs-on: macos-latest
     if: github.event_name == 'push'
     timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: "1.12"
+      - uses: julia-actions/cache@v2
+      - uses: julia-actions/julia-buildpkg@v1
+      - name: Precompile test environment
+        run: julia --color=yes --project=. -e 'using Pkg; Pkg.test(; julia_args=["--check-bounds=auto"])'
+        env:
+          TEST_GROUP: "none"
+          TEST_GROUPS: "8"
+
+  test-macos:
+    name: test macos - shard ${{ matrix.group }}/8
+    needs: prepare-macos
+    if: github.event_name == 'push'
+    runs-on: macos-latest
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
