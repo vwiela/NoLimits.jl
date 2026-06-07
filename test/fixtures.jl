@@ -111,6 +111,118 @@ end)
 fx_re_dm()       = _fx(:re_dm,       () -> DataModel(fx_re_model(),       fx_re_df(); primary_id=:ID, time_col=:t))
 fx_re_prior_dm() = _fx(:re_prior_dm, () -> DataModel(fx_re_prior_model(), fx_re_df(); primary_id=:ID, time_col=:t))
 
+# ── Multiple RE grouping columns (ID + SITE), scalar REs ─────────────────────
+fx_mg_df() = _fx(:mg_df, () -> DataFrame(
+    ID   = [1, 1, 2, 2, 3, 3, 4, 4],
+    SITE = [:A, :A, :A, :A, :B, :B, :B, :B],
+    t    = [0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+    y    = [1.0, 1.1, 0.9, 1.0, 1.2, 1.1, 1.0, 0.95],
+))
+
+fx_mg_model() = _fx(:mg_model, () -> @Model begin
+    @fixedEffects begin
+        a = RealNumber(1.0)
+        σ = RealNumber(0.5, scale=:log)
+    end
+    @covariates begin
+        t = Covariate()
+    end
+    @randomEffects begin
+        η_id   = RandomEffect(Normal(0.0, 1.0); column=:ID)
+        η_site = RandomEffect(Normal(0.0, 1.0); column=:SITE)
+    end
+    @formulas begin
+        y ~ Normal(a + η_id + η_site, σ)
+    end
+end)
+fx_mg_dm() = _fx(:mg_dm, () -> DataModel(fx_mg_model(), fx_mg_df(); primary_id=:ID, time_col=:t))
+
+# ── Multiple groups with multivariate REs ────────────────────────────────────
+fx_mvn_model() = _fx(:mvn_model, () -> @Model begin
+    @fixedEffects begin
+        a = RealNumber(0.0)
+        σ = RealNumber(1.0, scale=:log)
+        μ = RealVector([0.0, 0.0])
+    end
+    @covariates begin
+        t = Covariate()
+    end
+    @randomEffects begin
+        η_id   = RandomEffect(MvNormal([0.0, 0.0], LinearAlgebra.I(2)); column=:ID)
+        η_site = RandomEffect(MvNormal(μ, LinearAlgebra.I(2)); column=:SITE)
+    end
+    @formulas begin
+        y ~ Normal(a + η_id[1] + η_site[2], σ)
+    end
+end)
+fx_mvn_dm() = _fx(:mvn_dm, () -> DataModel(fx_mvn_model(), fx_mg_df(); primary_id=:ID, time_col=:t))
+
+# ── Scalar RE, ODE outcome ───────────────────────────────────────────────────
+fx_ode_df() = _fx(:ode_df, () -> DataFrame(ID=[1, 1, 2, 2], t=[0.0, 1.0, 0.0, 1.0], y=[0.9, 0.7, 1.0, 0.8]))
+fx_ode_model() = _fx(:ode_model, () -> begin
+    m = @Model begin
+        @fixedEffects begin
+            a = RealNumber(0.3)
+            σ = RealNumber(0.4, scale=:log)
+        end
+        @covariates begin
+            t = Covariate()
+        end
+        @randomEffects begin
+            η = RandomEffect(Normal(0.0, 1.0); column=:ID)
+        end
+        @DifferentialEquation begin
+            D(x1) ~ -a * x1 + η
+        end
+        @initialDE begin
+            x1 = 1.0
+        end
+        @formulas begin
+            y ~ Normal(x1(t), σ)
+        end
+    end
+    set_solver_config(m; saveat_mode=:saveat)
+end)
+fx_ode_dm() = _fx(:ode_dm, () -> DataModel(fx_ode_model(), fx_ode_df(); primary_id=:ID, time_col=:t))
+
+# ── Scalar RE, Poisson outcome ───────────────────────────────────────────────
+fx_pois_model() = _fx(:pois_model, () -> @Model begin
+    @fixedEffects begin
+        a = RealNumber(0.2)
+        ω = RealNumber(0.4, scale=:log, lower=1e-8, upper=Inf)
+    end
+    @covariates begin
+        t = Covariate()
+    end
+    @randomEffects begin
+        η = RandomEffect(Normal(0.0, ω); column=:ID)
+    end
+    @formulas begin
+        y ~ Poisson(exp(a + η))
+    end
+end)
+fx_pois_df() = _fx(:pois_df, () -> DataFrame(ID=repeat(1:6, inner=3), t=repeat(0.0:2.0, 6), y=repeat([1, 2, 0], 6)))
+fx_pois_dm() = _fx(:pois_dm, () -> DataModel(fx_pois_model(), fx_pois_df(); primary_id=:ID, time_col=:t))
+
+# ── Scalar RE, Bernoulli outcome (priors, for LaplaceMAP) ────────────────────
+fx_bern_model() = _fx(:bern_model, () -> @Model begin
+    @fixedEffects begin
+        a = RealNumber(0.0, prior=Normal(0.0, 1.0))
+        ω = RealNumber(0.5, scale=:log, lower=1e-8, upper=Inf, prior=LogNormal(0.0, 0.5))
+    end
+    @covariates begin
+        t = Covariate()
+    end
+    @randomEffects begin
+        η = RandomEffect(Normal(0.0, ω); column=:ID)
+    end
+    @formulas begin
+        y ~ Bernoulli(logistic(a + η))
+    end
+end)
+fx_bern_df() = _fx(:bern_df, () -> DataFrame(ID=repeat(1:6, inner=3), t=repeat(0.0:2.0, 6), y=repeat([1, 0, 1], 6)))
+fx_bern_dm() = _fx(:bern_dm, () -> DataModel(fx_bern_model(), fx_bern_df(); primary_id=:ID, time_col=:t))
+
 # ── Fits: one per (archetype, method), built once and reused everywhere ───────
 # Fixed-effects-only methods on the no-RE archetype:
 fx_mle()    = _fx(:mle,    () -> fit_model(fx_nore_dm(),       NoLimits.MLE(; optim_kwargs=(maxiters=3,)); serialization=_SER))
@@ -120,6 +232,11 @@ fx_pooled() = _fx(:pooled, () -> fit_model(fx_re_dm(),         NoLimits.Pooled(;
 # Random-effects methods on the scalar-RE archetype:
 fx_laplace() = _fx(:laplace, () -> fit_model(fx_re_dm(), NoLimits.Laplace(; optim_kwargs=(maxiters=3,)); serialization=_SER))
 fx_lmap()    = _fx(:lmap,    () -> fit_model(fx_re_prior_dm(), NoLimits.LaplaceMAP(; optim_kwargs=(maxiters=3,)); serialization=_SER))
+fx_mg_laplace()   = _fx(:mg_laplace,   () -> fit_model(fx_mg_dm(),   NoLimits.Laplace(; optim_kwargs=(maxiters=3,)); serialization=_SER))
+fx_mvn_laplace()  = _fx(:mvn_laplace,  () -> fit_model(fx_mvn_dm(),  NoLimits.Laplace(; optim_kwargs=(maxiters=3,)); serialization=_SER))
+fx_ode_laplace()  = _fx(:ode_laplace,  () -> fit_model(fx_ode_dm(),  NoLimits.Laplace(; optim_kwargs=(maxiters=2,)); serialization=_SER))
+fx_pois_laplace() = _fx(:pois_laplace, () -> fit_model(fx_pois_dm(), NoLimits.Laplace(; optim_kwargs=(maxiters=2,)); serialization=_SER))
+fx_bern_lmap()    = _fx(:bern_lmap,    () -> fit_model(fx_bern_dm(), NoLimits.LaplaceMAP(; optim_kwargs=(maxiters=2,)); serialization=_SER))
 fx_focei()   = _fx(:focei,   () -> fit_model(fx_re_dm(), NoLimits.FOCEI(; multistart_n=1, multistart_k=1, optim_kwargs=(maxiters=3,)); serialization=_SER))
 fx_ghq()     = _fx(:ghq,     () -> fit_model(fx_re_dm(), NoLimits.GHQuadrature(; level=2, optim_kwargs=(maxiters=3,)); serialization=_SER))
 fx_saem()    = _fx(:saem,    () -> fit_model(fx_re_dm(), NoLimits.SAEM(; maxiters=2, q_store_max=2); serialization=_SER))
