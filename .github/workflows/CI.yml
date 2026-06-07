@@ -11,13 +11,18 @@ concurrency:
 
 jobs:
   test:
-    name: Julia ${{ matrix.version }} - ${{ matrix.os }}
+    name: Julia ${{ matrix.version }} - ${{ matrix.os }} - group ${{ matrix.group }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         version: ["1.12"]
         os: [ubuntu-latest, macos-latest]
+        # The suite is split into balanced shards (see test/runtests.jl). Each
+        # job runs one shard via the TEST_GROUP env var, so total wall-clock is
+        # roughly the slowest shard rather than the full sequential suite.
+        group: [1, 2, 3, 4, 5, 6]
 
     steps:
       - uses: actions/checkout@v4
@@ -32,12 +37,22 @@ jobs:
 
       - uses: julia-actions/julia-runtest@v1
         with:
-          coverage: true
+          # Coverage instrumentation is slow; only collect it on Linux. macOS
+          # jobs validate platform compatibility without the overhead.
+          coverage: ${{ matrix.os == 'ubuntu-latest' }}
+        env:
+          TEST_GROUP: ${{ matrix.group }}
 
+      # Process + upload coverage from the Linux shards only. Codecov merges the
+      # per-shard lcov.info uploads (same commit SHA) into one combined report.
       - uses: julia-actions/julia-processcoverage@v1
+        if: matrix.os == 'ubuntu-latest'
 
       - uses: codecov/codecov-action@v4
+        if: matrix.os == 'ubuntu-latest'
         with:
           file: lcov.info
+          flags: group-${{ matrix.group }}
+          name: julia-${{ matrix.version }}-group-${{ matrix.group }}
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false

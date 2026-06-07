@@ -171,7 +171,11 @@ function _compute_uq_wald_no_re(res::FitResult;
                 catch
                     return Inf
                 end
-                η_i = η isa AbstractVector ? η[i] : η
+                # Non-pooled `eta_for` returns a single (empty) ComponentArray for the
+                # whole model; pooled returns one eta per individual. Only index in the
+                # pooled case — an empty ComponentArray is itself an AbstractVector, so a
+                # plain `isa AbstractVector` test would wrongly try to index it.
+                η_i = is_pooled ? η[i] : η
                 ll_i = _loglikelihood_individual(dm, i, θu, η_i, ll_cache_local)
                 ll_i == -Inf && return Inf
                 return Float64(-ll_i)

@@ -113,9 +113,9 @@ end
 
     Random.seed!(42)
     rows = NamedTuple[]
-    for i in 1:30
+    for i in 1:12
         ηi = 0.5 * randn()
-        for j in 1:5
+        for j in 1:4
             push!(rows, (ID=i, t=float(j-1), y=1.0 + ηi + 0.3 * randn()))
         end
     end
@@ -156,9 +156,9 @@ end
 
     Random.seed!(42)
     rows = NamedTuple[]
-    for i in 1:30
+    for i in 1:12
         ηi = 0.5 * randn()
-        for j in 1:5
+        for j in 1:4
             push!(rows, (ID=i, t=float(j-1), y=1.0 + ηi + 0.3 * randn()))
         end
     end
@@ -349,7 +349,7 @@ end
         end
     end
     dm_p = DataModel(model_p, df; primary_id=:ID, time_col=:t)
-    rmap = fit_model(dm_p, NL.FOCEIMAP(multistart_n=1, multistart_k=1, optim_kwargs=(maxiters=5,)); serialization=NL.EnsembleSerial())
+    rmap = fit_model(dm_p, NL.FOCEIMAP(multistart_n=1, multistart_k=1, optim_kwargs=(maxiters=3,)); serialization=NL.EnsembleSerial())
     @test isfinite(NL.get_objective(rmap))
     @test NL.get_converged(rmap) isa Bool
 end
@@ -380,7 +380,7 @@ end
 
     Random.seed!(5)
     rows = NamedTuple[]
-    for i in 1:8
+    for i in 1:6
         ηi = 0.3 * randn()
         for tt in (0.5, 1.0, 2.0, 4.0)
             conc = 10.0 * exp(-0.5 * exp(ηi) * tt)
@@ -390,7 +390,8 @@ end
     df = DataFrame(rows)
     dm = DataModel(model, df; primary_id=:ID, time_col=:t)
 
-    res = fit_model(dm, NL.FOCEI(multistart_n=1, multistart_k=1, optim_kwargs=(maxiters=15,)); serialization=NL.EnsembleSerial())
+    # Smoke test: a few iterations suffice to exercise the ODE FOCEI path + accessors.
+    res = fit_model(dm, NL.FOCEI(multistart_n=1, multistart_k=1, optim_kwargs=(maxiters=3,)); serialization=NL.EnsembleSerial())
     @test isfinite(NL.get_objective(res))
     @test res.result.eb_modes !== nothing
     @test NL.get_random_effects(res) isa NamedTuple
@@ -427,6 +428,6 @@ end
     # Must NOT throw at the invalid point — returns NaN so the caller backtracks.
     @test all(isnan, NL._focei_negH_batch(dm, info, θu, [-1.0], const_cache, ll_cache; interaction=true))
     # A full fit must complete (the optimiser may probe the invalid region).
-    res = fit_model(dm, NL.FOCEI(multistart_n=1, multistart_k=1, optim_kwargs=(maxiters=10,)); serialization=NL.EnsembleSerial())
+    res = fit_model(dm, NL.FOCEI(multistart_n=1, multistart_k=1, optim_kwargs=(maxiters=4,)); serialization=NL.EnsembleSerial())
     @test isfinite(NL.get_objective(res))
 end

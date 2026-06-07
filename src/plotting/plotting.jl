@@ -1091,110 +1091,6 @@ function _mcmc_random_effects_means(res::FitResult,
     return η_vec
 end
 
-function _vi_random_effects_means(res::FitResult,
-                                  dm::DataModel,
-                                  constants_re::NamedTuple,
-                                  θ::ComponentArray;
-                                  max_draws::Int=typemax(Int),
-                                  rng::AbstractRNG=Random.default_rng())
-    means = _vi_param_means(res; max_draws=max_draws, rng=rng)
-    re_names = get_re_names(dm.model.random.random)
-    isempty(re_names) && return Vector{ComponentArray}(undef, length(dm.individuals))
-
-    fixed_maps = _normalize_constants_re(dm, constants_re)
-    re_values = dm.re_group_info.values
-    dists_builder = get_create_random_effect_distribution(dm.model.random.random)
-    model_funs = get_model_funs(dm.model)
-    helpers = get_helper_funs(dm.model)
-
-    level_means = Dict{Symbol, Dict{Any, Any}}()
-    level_dims = Dict{Symbol, Int}()
-    for re in re_names
-        levels_all = getfield(re_values, re)
-        fixed = haskey(fixed_maps, re) ? getfield(fixed_maps, re) : Dict{Any, Any}()
-        levels_free = Any[]
-        for lvl in levels_all
-            haskey(fixed, lvl) && continue
-            push!(levels_free, lvl)
-        end
-
-        if isempty(levels_free)
-            level_means[re] = Dict{Any, Any}()
-            level_dims[re] = 1
-            continue
-        end
-        rep_idx = findfirst(ind -> (getfield(ind.re_groups, re) isa AbstractVector ?
-                                    (getfield(ind.re_groups, re)[1] in levels_free) :
-                                    (getfield(ind.re_groups, re) in levels_free)),
-                            dm.individuals)
-        const_cov = dm.individuals[rep_idx].const_cov
-        dist = getproperty(dists_builder(θ, const_cov, model_funs, helpers), re)
-        dim = dist isa Distributions.UnivariateDistribution ? 1 : length(dist)
-        level_dims[re] = dim
-        re_map = Dict{Any, Any}()
-        for (i, lvl) in enumerate(levels_free)
-            if dim == 1
-                name = Symbol(string(re), "_vals[", i, "]")
-                haskey(means, name) || error("VI posterior is missing random effect $(name).")
-                re_map[lvl] = means[name]
-            else
-                vals = Vector{Float64}(undef, dim)
-                for j in 1:dim
-                    name = Symbol(string(re), "_vals[", i, ",", j, "]")
-                    if !haskey(means, name)
-                        name = Symbol(string(re), "_vals[", i, "][", j, "]")
-                    end
-                    haskey(means, name) || error("VI posterior is missing random effect $(name).")
-                    vals[j] = means[name]
-                end
-                re_map[lvl] = vals
-            end
-        end
-        level_means[re] = re_map
-    end
-
-    η_vec = Vector{ComponentArray}(undef, length(dm.individuals))
-    for (i, ind) in enumerate(dm.individuals)
-        nt_pairs = Pair{Symbol, Any}[]
-        for re in re_names
-            g = getfield(ind.re_groups, re)
-            fixed = haskey(fixed_maps, re) ? getfield(fixed_maps, re) : Dict{Any, Any}()
-            dim = get(level_dims, re, 1)
-            if g isa AbstractVector
-                if length(g) == 1
-                    lvl = g[1]
-                    if haskey(fixed, lvl)
-                        v = fixed[lvl]
-                    else
-                        v = level_means[re][lvl]
-                    end
-                    push!(nt_pairs, re => (dim == 1 ? v : Vector{Float64}(v)))
-                else
-                    vals = dim == 1 ? Vector{Float64}(undef, length(g)) : Vector{Vector{Float64}}(undef, length(g))
-                    for (gi, lvl) in pairs(g)
-                        if haskey(fixed, lvl)
-                            v = fixed[lvl]
-                        else
-                            v = level_means[re][lvl]
-                        end
-                        vals[gi] = dim == 1 ? v : Vector{Float64}(v)
-                    end
-                    push!(nt_pairs, re => vals)
-                end
-            else
-                if haskey(fixed, g)
-                    v = fixed[g]
-                else
-                    v = level_means[re][g]
-                end
-                push!(nt_pairs, re => (dim == 1 ? v : Vector{Float64}(v)))
-            end
-        end
-        η_vec[i] = ComponentArray(NamedTuple(nt_pairs))
-    end
-    return η_vec
-end
-
 function _mcmc_drawn_params(res::FitResult,
                             dm::DataModel,
                             constants_re::NamedTuple,
@@ -1666,9 +1562,9 @@ function _default_random_effects(res::FitResult,
 
     if res.result isa MCMCResult
         return _mcmc_random_effects_means(res, dm, constants_re, θ; max_draws=mcmc_draws, rng=rng)
-    elseif res.result isa VIResult
-        return _vi_random_effects_means(res, dm, constants_re, θ; max_draws=mcmc_draws, rng=rng)
     end
+    # NB: VI is rejected for random-effects models at fit time, so a VIResult can
+    # never reach here with non-empty `re_names`; no VI branch is needed.
 
     if res.result isa PooledResult
         return res.result.eta_vec
