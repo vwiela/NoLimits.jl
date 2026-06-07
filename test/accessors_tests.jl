@@ -6,207 +6,51 @@ using DataFrames
 using ComponentArrays
 using Turing
 
-const LD = NoLimits
+const NL = NoLimits
 
-@testset "Accessors (fixed effects)" begin
-    model = @Model begin
-        @covariates begin
-            t = Covariate()
-        end
+# Accessors are exercised against the shared fixture fits (built once in
+# fixtures.jl) instead of re-fitting each method here.
 
-        @fixedEffects begin
-            a = RealNumber(0.2)
-            σ = RealNumber(0.5, scale=:log)
-        end
+@testset "Accessors: fixed-effects methods (MLE / MAP)" begin
+    res_mle = fx_mle()
+    @test NL.get_params(res_mle; scale=:untransformed) isa ComponentArray
+    @test NL.get_converged(res_mle) isa Bool
+    @test_throws ErrorException NL.get_chain(res_mle)
 
-        @formulas begin
-            y ~ Normal(a, σ)
-        end
-    end
+    # Without a stored DataModel, get_loglikelihood must error.
+    res_nostore = fit_model(fx_nore_dm(), NL.MLE(; optim_kwargs=(maxiters=2,)); store_data_model=false)
+    @test_throws ErrorException NL.get_loglikelihood(res_nostore)
 
-    df = DataFrame(
-        ID = [:A, :A, :B, :B],
-        t = [0.0, 1.0, 0.0, 1.0],
-        y = [0.1, 0.2, 0.0, -0.1]
-    )
-    dm = DataModel(model, df; primary_id=:ID, time_col=:t)
-
-    res_mle = fit_model(dm, NoLimits.MLE(; optim_kwargs=(maxiters=2,)))
-    @test NoLimits.get_params(res_mle; scale=:untransformed) isa ComponentArray
-    @test NoLimits.get_converged(res_mle) isa Bool
-    @test_throws ErrorException NoLimits.get_chain(res_mle)
-    res_mle_nostore = fit_model(dm, NoLimits.MLE(; optim_kwargs=(maxiters=2,)); store_data_model=false)
-    @test_throws ErrorException NoLimits.get_loglikelihood(res_mle_nostore)
-
-    model_map = @Model begin
-        @covariates begin
-            t = Covariate()
-        end
-
-        @fixedEffects begin
-            a = RealNumber(0.2, prior=Normal(0.0, 1.0))
-            σ = RealNumber(0.5, scale=:log, prior=LogNormal(0.0, 0.5))
-        end
-
-        @formulas begin
-            y ~ Normal(a, σ)
-        end
-    end
-    dm_map = DataModel(model_map, df; primary_id=:ID, time_col=:t)
-    res_map = fit_model(dm_map, NoLimits.MAP(; optim_kwargs=(maxiters=2,)))
-    @test_throws ErrorException NoLimits.get_chain(res_map)
+    @test_throws ErrorException NL.get_chain(fx_map())
 end
 
-@testset "Accessors (MCMC)" begin
-    model = @Model begin
-        @covariates begin
-            t = Covariate()
-        end
-
-        @fixedEffects begin
-            a = RealNumber(0.2, prior=Normal(0.0, 1.0))
-            σ = RealNumber(0.5, scale=:log, prior=LogNormal(0.0, 0.5))
-        end
-
-        @formulas begin
-            y ~ Normal(a, σ)
-        end
-    end
-
-    df = DataFrame(
-        ID = [:A, :A, :B, :B],
-        t = [0.0, 1.0, 0.0, 1.0],
-        y = [0.1, 0.2, 0.0, -0.1]
-    )
-    dm = DataModel(model, df; primary_id=:ID, time_col=:t)
-    res = fit_model(dm, NoLimits.MCMC(; turing_kwargs=(n_samples=2, n_adapt=2, progress=false)))
-    @test NoLimits.get_chain(res) isa MCMCChains.Chains
-    @test NoLimits.get_observed(res).y == df.y
-    @test NoLimits.get_sampler(res) isa Any
-    @test NoLimits.get_n_samples(res) == 2
-    @test_throws ErrorException NoLimits.get_loglikelihood(res)
+@testset "Accessors: MCMC" begin
+    res = fx_mcmc()
+    @test NL.get_chain(res) isa MCMCChains.Chains
+    @test NL.get_observed(res).y == fx_nore_df().y
+    @test NL.get_sampler(res) isa Any
+    @test NL.get_n_samples(res) == 20
+    @test_throws ErrorException NL.get_loglikelihood(res)
 end
 
-@testset "Accessors (Laplace/LaplaceMAP)" begin
-    model = @Model begin
-        @covariates begin
-            t = Covariate()
-        end
-
-        @fixedEffects begin
-            a = RealNumber(0.2)
-            σ = RealNumber(0.5, scale=:log)
-        end
-
-        @randomEffects begin
-            η = RandomEffect(Normal(0.0, 1.0); column=:ID)
-        end
-
-        @formulas begin
-            y ~ Normal(a + η, σ)
-        end
+@testset "Accessors: random-effects methods" begin
+    # get_random_effects works for every RE estimator (all share LaplaceResult-style EB modes).
+    for res in (fx_laplace(), fx_lmap(), fx_focei(), fx_ghq(), fx_mcem(), fx_saem())
+        @test !isempty(NL.get_random_effects(res))
     end
+    @test fx_mcem().result.eb_modes !== nothing
+    @test fx_saem().result.eb_modes !== nothing
 
-    df = DataFrame(
-        ID = [:A, :A, :B, :B],
-        t = [0.0, 1.0, 0.0, 1.0],
-        y = [0.1, 0.2, 0.0, -0.1]
-    )
-    dm = DataModel(model, df; primary_id=:ID, time_col=:t)
-    res = fit_model(dm, NoLimits.Laplace(; optim_kwargs=(maxiters=2,)))
-    re = NoLimits.get_random_effects(res)
-    @test !isempty(re)
-
-    re_samples = NoLimits.sample_random_effects(res; n_samples=5)
-    @test !isempty(re_samples)
-    @test :sample in propertynames(re_samples.η)
-    @test nrow(re_samples.η) == 5 * nrow(re.η)
-    @test sort(unique(re_samples.η.sample)) == collect(1:5)
-
-    model_map = @Model begin
-        @covariates begin
-            t = Covariate()
-        end
-
-        @fixedEffects begin
-            a = RealNumber(0.2, prior=Normal(0.0, 1.0))
-            σ = RealNumber(0.5, scale=:log, prior=LogNormal(0.0, 0.5))
-        end
-
-        @randomEffects begin
-            η = RandomEffect(Normal(0.0, 1.0); column=:ID)
-        end
-
-        @formulas begin
-            y ~ Normal(a + η, σ)
-        end
+    # sample_random_effects returns n_samples × per-level rows, tagged by :sample.
+    for (res, n, kw) in ((fx_laplace(), 5, ()),
+                         (fx_lmap(), 3, ()),
+                         (fx_mcem(), 4, (; n_adapt=2)),
+                         (fx_saem(), 3, (; n_adapt=2)))
+        base = nrow(NL.get_random_effects(res).η)
+        s = NL.sample_random_effects(res; n_samples=n, kw...)
+        @test !isempty(s)
+        @test :sample in propertynames(s.η)
+        @test nrow(s.η) == n * base
     end
-    dm_map = DataModel(model_map, df; primary_id=:ID, time_col=:t)
-    res_map = fit_model(dm_map, NoLimits.LaplaceMAP(; optim_kwargs=(maxiters=2,)))
-    re_map = NoLimits.get_random_effects(res_map)
-    @test !isempty(re_map)
-
-    re_map_samples = NoLimits.sample_random_effects(res_map; n_samples=3)
-    @test !isempty(re_map_samples)
-    @test nrow(re_map_samples.η) == 3 * nrow(re_map.η)
-end
-
-@testset "Accessors (MCEM/SAEM)" begin
-    model = @Model begin
-        @covariates begin
-            t = Covariate()
-        end
-
-        @fixedEffects begin
-            a = RealNumber(0.2)
-            σ = RealNumber(0.5, scale=:log)
-        end
-
-        @randomEffects begin
-            η = RandomEffect(Normal(0.0, 1.0); column=:ID)
-        end
-
-        @formulas begin
-            y ~ Normal(a + η, σ)
-        end
-    end
-
-    df = DataFrame(
-        ID = [:A, :A, :B, :B],
-        t = [0.0, 1.0, 0.0, 1.0],
-        y = [0.1, 0.2, 0.0, -0.1]
-    )
-    dm = DataModel(model, df; primary_id=:ID, time_col=:t)
-
-    res_mcem = fit_model(dm, NoLimits.MCEM(; sampler=MH(), turing_kwargs=(n_samples=2, n_adapt=2, progress=false),
-                                  maxiters=2))
-    re_mcem = NoLimits.get_random_effects(res_mcem)
-    @test !isempty(re_mcem)
-    @test res_mcem.result.eb_modes !== nothing
-
-    re_mcem_samples = NoLimits.sample_random_effects(res_mcem; n_samples=4, n_adapt=2)
-    @test !isempty(re_mcem_samples)
-    @test :sample in propertynames(re_mcem_samples.η)
-    @test nrow(re_mcem_samples.η) == 4 * nrow(re_mcem.η)
-    @test sort(unique(re_mcem_samples.η.sample)) == collect(1:4)
-
-
-    res_saem = fit_model(dm, NoLimits.SAEM(; sampler=MH(), turing_kwargs=(n_samples=2, n_adapt=2, progress=false),
-                                  q_store_max=2,
-                                  maxiters=2))
-    re_saem = NoLimits.get_random_effects(res_saem)
-    @test !isempty(re_saem)
-    @test res_saem.result.eb_modes !== nothing
-
-    re_saem_samples = NoLimits.sample_random_effects(res_saem; n_samples=3, n_adapt=2)
-    @test !isempty(re_saem_samples)
-    @test :sample in propertynames(re_saem_samples.η)
-    @test nrow(re_saem_samples.η) == 3 * nrow(re_saem.η)
-
-    # SAEM with the default SaemixMH sampler
-    res_saem_smh = fit_model(dm, NoLimits.SAEM(; q_store_max=2, maxiters=2))
-    re_saem_smh_samples = NoLimits.sample_random_effects(res_saem_smh; n_samples=3)
-    @test !isempty(re_saem_smh_samples)
-    @test nrow(re_saem_smh_samples.η) == 3 * nrow(NoLimits.get_random_effects(res_saem_smh).η)
-
+    @test sort(unique(NL.sample_random_effects(fx_laplace(); n_samples=5).η.sample)) == collect(1:5)
 end
