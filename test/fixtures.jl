@@ -21,7 +21,10 @@ using DataFrames
 using Distributions
 using LinearAlgebra
 using Random
-using Turing
+# Import ONLY the sampler symbol we need — a bare `using Turing` here would put
+# Turing's exports (e.g. `logprior`, ambiguous with NoLimits') into Main before
+# the unit-test files run, breaking their unqualified references.
+using Turing: MH
 
 const _FX = Dict{Symbol, Any}()
 _fx(key::Symbol, build) = get!(build, _FX, key)
@@ -246,3 +249,8 @@ fx_mcem()    = _fx(:mcem,    () -> fit_model(fx_re_dm(), NoLimits.MCEM(; sampler
 fx_mcmc()    = _fx(:mcmc,    () -> fit_model(fx_nore_prior_dm(), NoLimits.MCMC(; turing_kwargs=(n_samples=20, n_adapt=10, progress=false)); rng=Random.Xoshiro(1)))
 fx_mcmc_re() = _fx(:mcmc_re, () -> fit_model(fx_re_prior_dm(),   NoLimits.MCMC(; turing_kwargs=(n_samples=20, n_adapt=10, progress=false)); rng=Random.Xoshiro(2)))
 fx_vi()      = _fx(:vi,      () -> fit_model(fx_nore_prior_dm(), NoLimits.VI(; turing_kwargs=(max_iter=30, progress=false)); rng=Random.Xoshiro(3)))
+
+# UQ results, computed once with a small n_draws (UQ tests assert structure, not
+# Monte-Carlo precision). Reused by uq / summaries / plotting-UQ tests.
+fx_uq_mle()     = _fx(:uq_mle,     () -> compute_uq(fx_mle();     method=:wald, n_draws=30, serialization=_SER, rng=Random.Xoshiro(11)))
+fx_uq_laplace() = _fx(:uq_laplace, () -> compute_uq(fx_laplace(); n_draws=30, serialization=_SER, rng=Random.Xoshiro(12)))
