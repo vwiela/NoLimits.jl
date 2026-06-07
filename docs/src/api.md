@@ -148,6 +148,8 @@ MCEM_MCMC
 MCEM_IS
 SAEM
 MCMC
+Pooled
+PooledMap
 Multistart
 ```
 
