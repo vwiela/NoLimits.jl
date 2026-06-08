@@ -14,6 +14,9 @@ docs/cache/
 # local code for trying
 examples/
 
+# files related to first JSS paper
+paper/
+
 # Claude Code skills (local, not tracked)
 .claude/skills/
 
