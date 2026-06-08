@@ -17,7 +17,11 @@ jobs:
   test:
     name: test (Julia 1.12, ubuntu)
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    # The suite runs as sequential subprocess batches (test/runtests.jl) at -O1,
+    # which bounds memory (no stall) but is compile-bound on ~577 distinct
+    # @Models. Generous timeout: a real hang is now precluded by batching, so
+    # this only guards against a pathologically slow runner.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: julia-actions/setup-julia@v2
