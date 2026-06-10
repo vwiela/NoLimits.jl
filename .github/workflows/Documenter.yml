@@ -27,8 +27,10 @@ jobs:
 
       # Node.js is provided by DocumenterVitepress via NodeJS_jll — no setup-node step needed.
       # julia-docdeploy builds with --project=docs/ and dev-installs the package into it.
+      # Deploys via GITHUB_TOKEN (contents: write). Do NOT set DOCUMENTER_KEY unless an
+      # SSH deploy key secret of that name actually exists — an empty value forces
+      # Documenter onto the SSH path and breaks the deploy.
       - uses: julia-actions/julia-docdeploy@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }}
           GKSwstype: "100"   # headless GR backend for Plots.jl
