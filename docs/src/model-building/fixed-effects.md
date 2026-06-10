@@ -40,7 +40,7 @@ NoLimits provides parameter types for scalars, vectors, structured matrices, and
 | `ProbabilityVector` | Probability simplex of length k≥2 | `Vector` summing to 1 |
 | `DiscreteTransitionMatrix` | n×n row-stochastic matrix (n≥2) | row-stochastic `Matrix` |
 | `ContinuousTransitionMatrix` | n×n rate matrix / Q-matrix (n≥2) | rate `Matrix` |
-| `NNParameters` | Lux neural network weights | flattened Lux params |
+| `NNParameters` | Lux `Chain` or SimpleChains `SimpleChain` weights | flattened network params |
 | `SoftTreeParameters` | Soft decision tree parameters | flattened tree params |
 | `SplineParameters` | B-spline coefficients | coefficient `Vector` |
 | `NPFParameter` | Normalizing planar flow parameters | flattened flow params |
@@ -99,7 +99,7 @@ For `RealVector`, scales can be mixed per element by passing a `Vector{Symbol}`,
 
 ## Example: Learned Function Approximators
 
-Neural networks, soft decision trees, and B-splines can be declared as fixed effects and are automatically exposed as callable model functions. This enables flexible, data-driven components within an otherwise parametric model specification.
+Neural networks, soft decision trees, and B-splines can be declared as fixed effects and are automatically exposed as callable model functions. This enables flexible, data-driven components within an otherwise parametric model specification. `NNParameters` accepts either a Lux `Chain` or a SimpleChains `SimpleChain` — see [Function Approximators](universal-function-approximators.md) for the trade-offs (SimpleChains is faster and lower-allocation under ForwardDiff; Lux is required for `AutoEnzyme`).
 
 ```julia
 using NoLimits

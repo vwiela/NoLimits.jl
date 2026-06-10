@@ -200,8 +200,8 @@ end
 Estimate the batch marginal log-likelihood via MCMC-guided Gaussian importance sampling.
 
 **Algorithm:**
-1. Run Turing MCMC with `n_warmup` warmup steps followed by `n_warmup` post-warmup steps
-   to draw approximate posterior samples `b_r ~ p(b | y, θ)`.
+1. Run Turing MCMC with `n_warmup` adaptation (warmup) steps followed by `max(n_warmup, 50)`
+   kept steps to draw approximate posterior samples `b_r ~ p(b | y, θ)`.
 2. Fit a Gaussian proposal `q = N(μ, Σ)` to those posterior samples (mean + regularised
    covariance). This captures the location and scale of the posterior without assuming
    anything about its shape at the mode.
@@ -234,7 +234,7 @@ function batch_loglik_mc_turing(
     re_names = get_re_names(dm.model.random.random)
 
     # Step 1: Run MCMC to collect posterior samples for fitting the proposal.
-    # n_warmup steps are discarded; then n_warmup more are kept for proposal fitting.
+    # n_warmup steps are used for adaptation; then max(n_warmup, 50) are kept for proposal fitting.
     effective_sampler = sampler === nothing ? Turing.MH() : sampler
     n_mcmc = max(n_warmup, 50)
     tkwargs = (n_samples=n_mcmc, n_adapt=n_warmup, progress=false, verbose=false)

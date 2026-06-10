@@ -25,6 +25,7 @@ const TEST_FILES = [
     "ad_model_full.jl",
     "helpers_tests.jl",
     "parameters_tests.jl",
+    "simplechains_nn_tests.jl",
     "transform_tests.jl",
     "fixed_effects_tests.jl",
     "splines_tests.jl",

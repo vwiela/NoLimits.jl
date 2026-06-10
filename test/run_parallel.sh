@@ -91,8 +91,6 @@ TESTS=(
   hmm_mv_continuous_tests.jl
   markov_discrete_time_tests.jl
   markov_continuous_time_tests.jl
-  ct_hmm_equil_approx_accuracy.jl
-  ct_hmm_gap_cost.jl
   stickbreak_parameter_tests.jl
   stickbreak_transform_tests.jl
   stickbreak_uq_tests.jl

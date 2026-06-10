@@ -66,8 +66,10 @@ evaluation point, its spectral decomposition, and a local identifiability verdic
 
 Fields:
 - `method::Symbol`: estimation method used (e.g. `:mle`, `:laplace`).
-- `objective::Symbol`: objective evaluated (`:nll`, `:map`, or `:laplace_nll`).
-- `at::Symbol`: where the Hessian was evaluated (`:start` or `:fit`).
+- `objective::Symbol`: objective evaluated (`:likelihood`, `:posterior`, `:laplace_likelihood`,
+  or `:laplace_posterior`).
+- `at::Symbol`: where the Hessian was evaluated (`:start`, `:fit`, or `:custom` for a
+  user-supplied point).
 - `point_untransformed`: parameter values on the natural scale.
 - `point_transformed`: parameter values on the transformed scale.
 - `free_parameters::Vector{Symbol}`: names of the free (non-constant) parameters.

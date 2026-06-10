@@ -47,7 +47,7 @@ All plotting functions accept a `style::PlotStyle` keyword argument. Construct a
 - `font_family::String`: font family for all text (default: `"Helvetica"`).
 - `font_size_title`, `font_size_label`, `font_size_tick`, `font_size_legend`,
   `font_size_annotation`: font sizes in points, applied uniformly across all plots
-  (defaults: 12, 11, 10, 9, 8).
+  (defaults: 16, 14, 12, 11, 10).
 - `line_width_primary`, `line_width_secondary`: line widths in pixels.
 - `comparison_default_linestyle`, `comparison_line_styles`: line style overrides for
   `plot_fits_comparison`.

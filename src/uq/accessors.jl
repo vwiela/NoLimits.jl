@@ -12,7 +12,7 @@ using ComponentArrays
 """
     get_uq_backend(uq::UQResult) -> Symbol
 
-Return the UQ backend used (`:wald`, `:chain`, or `:profile`).
+Return the UQ backend used (`:wald`, `:chain`, `:profile`, or `:mcmc_refit`).
 """
 get_uq_backend(uq::UQResult) = uq.backend
 

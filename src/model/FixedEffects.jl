@@ -642,7 +642,28 @@ function _check_nn_flat_layout(p::NNParameters, ps_ca::ComponentArray, ::Type{T}
     return nothing
 end
 
+# SimpleChains backend (NNParameters built from a `SimpleChains.SimpleChain`): parameters are
+# natively a flat vector, so the forward pass is `chain(x, θ)` directly — no Lux states and no
+# ComponentArray-axes rebuild. `_to_type` materialises the input and the ComponentArray view of θ
+# into dense `Vector{TT}` (what SimpleChains expects), promoting so both share an eltype. This
+# path is ForwardDiff-compatible (SimpleChains' forwarddiff_matmul handles `Dual`s) but NOT
+# Enzyme-differentiable (LoopVectorization `@turbo`) — use a Lux chain for AutoEnzyme. Output is an
+# `SVector`, indexable exactly like the Lux `Vector` output (`NN1(x, θ)[1]`). The backend is chosen
+# by branching on `p.chain isa SimpleChain` (resolved at compile time for each concrete `p`),
+# because parametric dispatch on the NNParameters chain type does not reliably out-specialise the
+# unconstrained Lux methods when a free `Type{T}` argument is present.
+function _simplechain_model_fun(chain)
+    return (x, θ) -> begin
+        TT = promote_type(eltype(θ), _value_type(x))
+        return chain(_to_type(TT, x), _to_type(TT, θ))
+    end
+end
+
 function _collect_model_fun!(p::NNParameters, model_fun_pairs)
+    if p.chain isa SimpleChain
+        push!(model_fun_pairs, p.function_name => _simplechain_model_fun(p.chain))
+        return nothing
+    end
     st = Lux.initialstates(Xoshiro(0), p.chain)
     T = eltype(p.value)
     ps_axes = _nn_axes_template(p, T)
@@ -650,6 +671,10 @@ function _collect_model_fun!(p::NNParameters, model_fun_pairs)
 end
 
 function _collect_model_fun!(p::NNParameters, model_fun_pairs, ::Type{T}) where {T}
+    if p.chain isa SimpleChain
+        push!(model_fun_pairs, p.function_name => _simplechain_model_fun(p.chain))
+        return nothing
+    end
     st = Lux.initialstates(Xoshiro(0), p.chain)
     stT = Functors.fmap(y -> _to_type(T, y), st)
     ps_axes = _nn_axes_template(p, T)

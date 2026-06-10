@@ -133,9 +133,9 @@ function stickbreak_forward(p::AbstractVector{<:Real})
     k = length(p)
     k >= 2 || error("stickbreak_forward requires at least 2 elements.")
     T = promote_type(eltype(p), Float64)
-    # Compute remaining = 1 - cumsum(p)[i-1] using cumprod of (1 - p/remaining)
-    # Iterative but non-mutating via map with accumulated state is tricky;
-    # use simple loop (forward transform is not typically differentiated by Zygote).
+    # `remaining` tracks 1 - Σ_{j<i} p_j, updated by subtracting each pᵢ in the loop.
+    # A simple mutating loop suffices here: unlike the inverse, the forward transform
+    # is not typically differentiated by Zygote, so it need not be non-mutating.
     t = Vector{T}(undef, k - 1)
     remaining = one(T)
     for i in 1:(k - 1)

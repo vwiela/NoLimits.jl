@@ -34,7 +34,7 @@ entries, e.g. `[2,3,4]`.
 
 # Example
 ```julia
-dist = ContinuousTimeObservedStatesMarkovModel(Q, π, labels, Δt)
+dist = ContinuousTimeObservedStatesMarkovModel(Q, π, Δt, labels)
 @formulas begin
     y ~ coarsed(dist)
 end

@@ -25,7 +25,7 @@ The sampler works in the natural proposal space for each distribution family:
 | `Normal`          | η ∈ ℝ          | identity      |
 | `MvNormal`        | η ∈ ℝ^d        | identity      |
 | `MvLogNormal`     | z = log.(η)    | log / exp (component-wise) |
-| `MvLogitNormal`   | z = logit.(η)  | logit / logistic (component-wise) |
+| `MvLogitNormal`   | z = alr(η) ∈ ℝ^d | additive log-ratio / softmax |
 | `LogNormal`       | z = log(η)     | log / exp     |
 | `Exponential`     | z = log(η)     | log / exp     |
 | `Beta`            | z = logit(η)   | logit / sigmoid |

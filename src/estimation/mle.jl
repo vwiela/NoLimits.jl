@@ -11,7 +11,7 @@ using LineSearches
 using OptimizationBBO
 
 """
-    MLE(; optimizer, optim_kwargs, adtype, lb, ub) <: FittingMethod
+    MLE(; optimizer, optim_kwargs, adtype, lb, ub, ignore_model_bounds) <: FittingMethod
 
 Maximum Likelihood Estimation for models without random effects.
 
@@ -24,6 +24,8 @@ Maximum Likelihood Estimation for models without random effects.
 - `lb`: lower bounds on the transformed parameter scale, or `nothing` to use the
   model-declared bounds.
 - `ub`: upper bounds on the transformed parameter scale, or `nothing`.
+- `ignore_model_bounds::Bool = false`: if `true`, ignore the bounds declared in
+  `@fixedEffects` (explicit `lb`/`ub` still apply).
 """
 struct MLE{O, K, A, L, U} <: FittingMethod
     optimizer::O

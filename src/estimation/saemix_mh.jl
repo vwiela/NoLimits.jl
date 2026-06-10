@@ -23,8 +23,9 @@ Implements the first three MCMC kernels used by the saemix R package:
   prior (early SAEM iterations or weakly informative data).
 
 - **Kernel 2** (`n_kern2` steps): per-level coordinate-wise random-walk in the
-  natural parameter space. Acceptance uses the full log-joint ratio. Proposal
-  scales follow saemix's `domega2[:, 1]` adaptation rule.
+  bijected (z) proposal space, with a log-Jacobian acceptance correction.
+  Acceptance uses the full log-joint ratio. Proposal scales follow saemix's
+  `domega2[:, 1]` adaptation rule.
 
 - **Kernel 3** (`n_kern3` steps): block random-walk kernel with the same
   iteration-dependent block-size schedule as saemix. Proposal scales follow

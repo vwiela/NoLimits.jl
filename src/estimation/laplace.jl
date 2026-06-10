@@ -1357,9 +1357,6 @@ function _laplace_compute_bstar_batch!(cache::_LaplaceCache,
             n *= 2
             k = min(k * 2, n)
         end
-        #if g_best_norm > multistart.grad_tol
-        #    @info "Laplace EBE multistart did not reach grad_tol; consider increasing multistart_n/k." batch=bi grad_norm=g_best_norm
-        #end
     end
     _laplace_store_bstar!(cache, bi, b_best)
     return nothing
@@ -1808,7 +1805,7 @@ struct Laplace{O, K, A, IO, HO, CO, MS, L, U} <: FittingMethod
     lb::L
     ub::U
     ignore_model_bounds::Bool
-    nan_recovery::Symbol   # :nan (propagate NaN to optimizer) or :fd (full FD fallback)
+    nan_recovery::Symbol   # :backtrack (default; NaN grad → non-finite objective), :fd (finite-difference gradient fallback), or :nan (propagate NaN to the optimizer)
 end
 
 Laplace(; optimizer=OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracking()),
@@ -2321,7 +2318,7 @@ function _fit_model(dm::DataModel, method::Laplace, args...;
                 # :backtrack (default) — treat NaN gradient as non-finite objective to force backtracking
                 return (infT, ComponentArray(zeros(T, length(θt_free)), axs_free))
             end
-            # :nan — NaN propagates to the optimizer as-is (for debugging)
+            # :nan — no recovery; the NaN gradient is passed to the optimizer unchanged
         end
         obj += _penalty_value(θu, penalty)
         _laplace_obj_cache_set_obj_grad!(obj_cache, θt_free, obj, grad_free)
@@ -2550,7 +2547,7 @@ function _fit_model(dm::DataModel, method::LaplaceMAP, args...;
                 # :backtrack (default) — treat NaN gradient as non-finite objective to force backtracking
                 return (infT, ComponentArray(zeros(T, length(θt_free)), axs_free))
             end
-            # :nan — NaN propagates to the optimizer as-is (for debugging)
+            # :nan — no recovery; the NaN gradient is passed to the optimizer unchanged
         end
         _laplace_obj_cache_set_obj_grad!(obj_cache, θt_free, obj, grad_free)
         return (obj, grad_free)

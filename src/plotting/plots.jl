@@ -308,7 +308,6 @@ Plot raw observed data for each individual as a multi-panel figure.
 - `ncols::Int = 3`: number of subplot columns.
 - `marginal_layout::Symbol = :single`: `:single` keeps one figure with every marginal overlaid per individual; `:vector` returns a figure per marginal (only valid for vector-valued observables and requires `save_path`/`plot_path` to be `nothing`).
 - `style::PlotStyle = PlotStyle()`: visual style configuration.
-- `marginal_layout::Symbol = :single`: `:single` produces one figure with subplots per individual showing every marginal; `:vector` returns a figure per marginal (only valid when the observable is vector-valued and requires `save_path` and `plot_path` to be `nothing`).
 - `kwargs_subplot`, `kwargs_layout`: extra keyword arguments for subplots and layout.
 - `save_path::Union{Nothing, String} = nothing`: file path to save the plot (ignored for `:vector` mode).
 """

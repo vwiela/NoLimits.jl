@@ -332,7 +332,8 @@ function ContinuousTimeDiscreteStatesHMM(
         n_states, transition_matrix, emission_dists, initial_dist, Δt, propagation_mode)
 end
 
-# Transition Matrix must be transposed here as expv uses column sums that equal zero
+# _ct_hmm_probabilities_hidden_states transposes the rate matrix internally, because
+# expv expects a generator whose columns (not rows) sum to zero.
 probabilities_hidden_states(hmm::ContinuousTimeDiscreteStatesHMM) =
     _ct_hmm_probabilities_hidden_states(
         hmm.transition_matrix, hmm.initial_dist.p, hmm.Δt; mode=hmm.propagation_mode)

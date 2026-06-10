@@ -35,7 +35,7 @@ end
 VI(; turing_kwargs=NamedTuple()) = VI(turing_kwargs)
 
 """
-    VIResult{Q, T, S, N, O, V, C} <: MethodResult
+    VIResult{Q, T, S, N, O, V, C, M} <: MethodResult
 
 Method-specific result from a [`VI`](@ref) fit. Stores the variational posterior,
 optimization trace/state, ELBO summary, and observed data.

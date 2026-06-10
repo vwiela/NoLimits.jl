@@ -115,7 +115,7 @@ get_de_f(de::DifferentialEquation) = de.builders.f
 
 Return the parameter compiler function with signature `compile(p) -> (vars=..., funs=...)`.
 It extracts the named variable and function bindings from a raw parameter `NamedTuple`
-and caches them inside a `DEParams`.
+and returns them as a `(vars, funs)` named tuple.
 """
 get_de_compiler(de::DifferentialEquation) = de.builders.compile
 

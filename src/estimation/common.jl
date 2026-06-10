@@ -1416,7 +1416,7 @@ Laplace, LaplaceMAP, SAEM, MCEM, GHQuadrature, GHQuadratureMAP.
   sampling for **all** batches instead of AGHQ. See [`MCIntegrator`](@ref).
 - `fallback::Union{Nothing, MCIntegrator}`: what to do when the Cholesky of `-H` fails
   for a batch. `nothing` raises an error (old behaviour). An `MCIntegrator` falls back to
-  sampling for that batch and issues a warning. Default: `MCIntegrator()` (prior sampling,
+  sampling for that batch and issues a warning. Default: `MCIntegrator()` (Turing-based sampling,
   1000 samples).
 """
 function get_loglikelihood_quadrature(dm::DataModel,

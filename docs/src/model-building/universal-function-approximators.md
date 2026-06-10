@@ -4,7 +4,7 @@ Nonlinear mixed-effects models often require flexible functional forms to captur
 
 The supported parameter constructors are:
 
-- `NNParameters(...)` -- wraps a [Lux.jl](https://github.com/LuxDL/Lux.jl) neural network architecture.
+- `NNParameters(...)` -- wraps a [Lux.jl](https://github.com/LuxDL/Lux.jl) `Chain` **or** a [SimpleChains.jl](https://github.com/PumasAI/SimpleChains.jl) `SimpleChain` neural-network architecture.
 - `SoftTreeParameters(...)` -- constructs a differentiable soft decision tree.
 
 Both are declared in `@fixedEffects` and exposed as callable model functions through the `function_name` keyword argument.
@@ -17,6 +17,22 @@ Both are declared in `@fixedEffects` and exposed as callable model functions thr
     documented in [`@fixedEffects`](@ref) and [`@randomEffects`](@ref); full constructor
     signatures are in the [Parameter Types](../api.md#Parameter-Types) section of the API
     reference.
+
+!!! tip "Lux vs. SimpleChains backend for `NNParameters`"
+    `NNParameters` accepts either a Lux `Chain` or a SimpleChains `SimpleChain`. The call
+    convention and output are identical, so the two are drop-in interchangeable.
+    `SimpleChain` is purpose-built for small CPU networks and gives noticeably faster,
+    lower-allocation forward passes and gradients; because it is fully ForwardDiff-compatible
+    it works with every ForwardDiff-based estimator (MLE, MAP, Laplace, FOCEI, SAEM, MCEM, …).
+    The one restriction: a `SimpleChain` is **not** differentiable by Enzyme (its `@turbo`
+    kernels), so keep a Lux `Chain` if you fit with `AutoEnzyme`.
+
+    ```julia
+    using SimpleChains
+    # Equivalent to Lux.Chain(Lux.Dense(2, 4, tanh), Lux.Dense(4, 1)):
+    chain = SimpleChain(static(2), TurboDense(tanh, 4), TurboDense(identity, 1))
+    z_nn = NNParameters(chain; function_name=:NN1, calculate_se=false)
+    ```
 
 ## Where They Can Be Used
 

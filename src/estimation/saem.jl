@@ -325,7 +325,7 @@ or closed-form updates (when `builtin_stats` is enabled).
 
 # Keyword Arguments
 - `optimizer`: M-step Optimization.jl optimiser. Defaults to `LBFGS` with backtracking.
-- `optim_kwargs::NamedTuple = (; iterations=10, g_abstol=1e-2, f_reltol=1e-3)`: keyword
+- `optim_kwargs::NamedTuple = (; iterations=10, g_abstol=1e-4, f_reltol=1e-6)`: keyword
   arguments for the M-step `solve`. The defaults cap the inner LBFGS at 10 iterations
   and convergence tolerances (max-norm gradient < 1e-4, relative function improvement
   < 1e-6) appropriate for the approximate M-step in SAEM — tight convergence is
@@ -361,7 +361,8 @@ or closed-form updates (when `builtin_stats` is enabled).
 - `q_store_min::Int = 0`: guaranteed minimum number of retained snapshots. When epsilon
   pruning would reduce the active count below this floor, the most-recent snapshots are
   kept unconditionally regardless of their weight.
-- `t0::Int = 20`: burn-in iterations before stochastic approximation averaging begins.
+- `t0`: burn-in iterations before stochastic approximation averaging begins. Defaults to
+  `maxiters ÷ 2` (150 with the default `maxiters=300`).
 - `kappa::Float64 = 0.65`: step-size decay exponent for the Robbins-Monro schedule.
 - `maxiters::Int = 300`: maximum number of SAEM iterations.
 - `rtol_theta`, `atol_theta`: relative/absolute convergence tolerance on fixed effects.

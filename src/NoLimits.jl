@@ -1,7 +1,5 @@
 module NoLimits
 
-
-
 include("Constants.jl")
 include("distributions/outcomes/_HMMUtils.jl")
 include("distributions/outcomes/ContinuousTimeHMM.jl")
@@ -72,7 +70,5 @@ include("plotting/plotting_observation_distributions.jl")
 include("plotting/plotting_residuals.jl")
 include("plotting/plotting_random_effects.jl")
 include("plotting/plotting_uq.jl")
-
-
 
 end # module NoLimits

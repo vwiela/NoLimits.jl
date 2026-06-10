@@ -14,11 +14,12 @@ using Random
 
 Compute uncertainty quantification for the fixed-effect parameters of a fitted model.
 
-Three backends are supported:
+Four backends are supported:
 - **`:wald`** – Wald intervals derived from the inverse Hessian of the objective.
 - **`:chain`** – Posterior intervals from posterior draws (MCMC chains or VI posterior
   samples).
-- **`:profile`** – Profile-likelihood intervals computed by NLopt.
+- **`:profile`** – Profile-likelihood intervals computed via LikelihoodProfiler.jl.
+- **`:mcmc_refit`** – Posterior intervals from a fresh MCMC refit of the fitted model.
 
 # Keyword Arguments
 - `method::Symbol = :auto`: UQ backend. `:auto` selects `:chain` for MCMC/VI fits and
@@ -26,7 +27,7 @@ Three backends are supported:
 - `interval::Symbol = :auto`: interval type. `:auto` picks a sensible default per backend.
   For Wald: `:wald` or `:normal`; for chain: `:equaltail` or `:chain`; for profile:
   `:profile`.
-- `vcov::Symbol = :hessian`: covariance source for Wald UQ (`:hessian` only).
+- `vcov::Symbol = :hessian`: covariance source for Wald UQ (`:hessian` or `:sandwich`).
 - `re_approx::Symbol = :auto`: random-effects approximation for Laplace-family Hessians.
 - `re_approx_method`: fitting method used for the RE approximation, or `nothing`.
 - `level::Real = 0.95`: nominal coverage level for the intervals.
@@ -34,14 +35,15 @@ Three backends are supported:
   Hessians (Wald only).
 - `hessian_backend::Symbol = :auto`: Hessian computation backend.
 - `fd_abs_step`, `fd_rel_step`, `fd_max_tries`: finite-difference Hessian settings.
-- `n_draws::Int = 2000`: number of draws to generate (for the chain and MCMC backends).
+- `n_draws::Int = 2000`: number of Gaussian draws generated for Wald UQ, and the default
+  draw count for the chain/VI backend.
 - `mcmc_warmup`, `mcmc_draws`: chain-draw settings. For MCMC, warm-up and draw count;
   for VI, `mcmc_draws` is the posterior sample count (`mcmc_warmup` ignored).
 - `constants`, `constants_re`, `penalty`, `ode_args`, `ode_kwargs`, `serialization`:
   forwarded to objective evaluations (default: inherit from the source fit result).
 - `profile_method`, `profile_scan_width`, `profile_scan_tol`, `profile_loss_tol`,
   `profile_local_alg`, `profile_max_iter`, `profile_ftol_abs`, `profile_kwargs`:
-  NLopt profile-likelihood settings.
+  LikelihoodProfiler.jl profile-likelihood settings.
 - `mcmc_method`, `mcmc_sampler`, `mcmc_turing_kwargs`, `mcmc_adtype`, `mcmc_fit_kwargs`:
   MCMC backend settings.
 - `rng::AbstractRNG = Random.default_rng()`: random-number generator.

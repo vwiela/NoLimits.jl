@@ -2,6 +2,7 @@ using LinearAlgebra
 using Parameters
 using Distributions
 using Lux
+using SimpleChains
 using Optimisers
 using Random
 using NormalizingFlows
@@ -28,8 +29,10 @@ Abstract base type for all parameter block types used in `@fixedEffects`.
 
 Concrete subtypes: [`RealNumber`](@ref), [`RealVector`](@ref),
 [`RealPSDMatrix`](@ref), [`RealDiagonalMatrix`](@ref),
-[`NNParameters`](@ref), [`SoftTreeParameters`](@ref),
-[`SplineParameters`](@ref), [`NPFParameter`](@ref).
+[`ProbabilityVector`](@ref), [`DiscreteTransitionMatrix`](@ref),
+[`ContinuousTransitionMatrix`](@ref), [`NNParameters`](@ref),
+[`SoftTreeParameters`](@ref), [`SplineParameters`](@ref),
+[`NPFParameter`](@ref).
 """
 abstract type AbstractParameterBlock end
 
@@ -44,7 +47,7 @@ A scalar real-valued fixed-effect parameter block.
 # Keyword Arguments
 - `name::Symbol = :unnamed`: parameter name (injected automatically by `@fixedEffects`).
 - `scale::Symbol = :identity`: reparameterisation applied during optimisation.
-  Must be one of `REAL_SCALES` (`:identity`, `:log`).
+  Must be one of `REAL_SCALES` (`:identity`, `:log`, `:logit`).
 - `lower::Real = -Inf`: lower bound on the natural scale (defaults to `EPSILON` when `scale=:log`).
 - `upper::Real = Inf`: upper bound on the natural scale.
 - `prior = Priorless()`: prior distribution (`Distributions.Distribution`) or `Priorless()`.
@@ -91,7 +94,7 @@ A vector of real-valued fixed-effect parameters with per-element scale options.
 # Keyword Arguments
 - `name::Symbol = :unnamed`: parameter name (injected automatically by `@fixedEffects`).
 - `scale`: per-element scale symbols. A single `Symbol` or a `Vector{Symbol}` of
-  the same length as `value`. Each element must be in `REAL_SCALES` (`:identity`, `:log`).
+  the same length as `value`. Each element must be in `REAL_SCALES` (`:identity`, `:log`, `:logit`).
   Defaults to all `:identity`.
 - `lower`: lower bounds per element. Defaults to `-Inf` (or `EPSILON` for `:log` elements).
 - `upper`: upper bounds per element. Defaults to `Inf`.
@@ -241,7 +244,8 @@ end
 """
     NNParameters(chain; name, function_name, seed, prior, calculate_se) -> NNParameters
 
-A parameter block that wraps the flattened parameters of a Lux.jl neural-network chain.
+A parameter block that wraps the flattened parameters of a neural-network chain — either a
+Lux.jl `Chain` or a SimpleChains.jl `SimpleChain`.
 
 The resulting parameter is optimised as a flat real vector. Inside model blocks
 (`@randomEffects`, `@preDifferentialEquation`, `@formulas`) the network is called
@@ -249,12 +253,18 @@ as `function_name(input, θ_slice)`, where `θ_slice` is the corresponding slice
 the fixed-effects `ComponentArray`.
 
 # Arguments
-- `chain`: a `Lux.Chain` defining the neural-network architecture.
+- `chain`: the neural-network architecture, either a `Lux.Chain` or a
+  `SimpleChains.SimpleChain`. The `SimpleChain` backend gives much lower allocation and
+  faster forward passes for small CPU MLPs and is fully ForwardDiff-compatible, so it works
+  with every ForwardDiff-based fitting method (MLE/MAP/Laplace/FOCEI/SAEM/MCEM/…). Note: a
+  `SimpleChain` is **not** Enzyme-differentiable (its `@turbo` kernels); use a `Lux.Chain`
+  if you need `AutoEnzyme`. Output shape and the call convention are identical for both
+  backends, so a `SimpleChain` is a drop-in replacement for a `Lux.Chain`.
 
 # Keyword Arguments
 - `name::Symbol = :unnamed`: parameter name (injected automatically by `@fixedEffects`).
 - `function_name::Symbol`: the name used to call the network in model blocks.
-- `seed::Integer = 0`: random seed for initialising the Lux parameters.
+- `seed::Integer = 0`: random seed for initialising the network parameters.
 - `prior = Priorless()`: `Priorless()`, a `Vector{Distribution}` of length equal to
   the number of parameters, or a multivariate `Distribution` with matching `length`.
 - `calculate_se::Bool = false`: whether to include this parameter in standard-error calculations.
@@ -273,8 +283,8 @@ end
 
 function NNParameters(chain; name::Symbol = :unnamed, function_name::Symbol, seed::Integer = 0,
     prior = Priorless(), calculate_se::Bool = false)
-    if !isa(chain, Lux.Chain) 
-        error("Invalid chain for parameter $(name). Expected a Lux chain; got $(typeof(chain)).")
+    if !isa(chain, Lux.Chain)
+        error("Invalid chain for parameter $(name). Expected a `Lux.Chain` or a `SimpleChains.SimpleChain`; got $(typeof(chain)).")
     end
     rng = Xoshiro(seed)
     init_params = Lux.initialparameters(rng, chain)
@@ -285,6 +295,28 @@ function NNParameters(chain; name::Symbol = :unnamed, function_name::Symbol, see
     u = fill(T(Inf), length(v))
     _check_nn_prior(prior, name, length(v))
     return NNParameters{T, typeof(v), typeof(chain), typeof(reconstructor)}(name, function_name, chain, v, reconstructor, l, u, prior, calculate_se)
+end
+
+"""
+    NNParameters(chain::SimpleChain; name, function_name, seed, prior, calculate_se) -> NNParameters
+
+SimpleChains.jl backend for [`NNParameters`](@ref). A `SimpleChains.SimpleChain` already stores
+its parameters as a flat `Vector`, so they are kept as-is (no `Optimisers.destructure`/`reconstructor`
+round-trip); at runtime the network is evaluated directly as `chain(input, θ_slice)`. Parameters
+are initialised as `Float64`. This backend is ForwardDiff-compatible but **not**
+Enzyme-differentiable — see the main [`NNParameters`](@ref) docstring for the full caveat.
+"""
+function NNParameters(chain::SimpleChain; name::Symbol = :unnamed, function_name::Symbol, seed::Integer = 0,
+    prior = Priorless(), calculate_se::Bool = false)
+    T = Float64
+    v = Vector{T}(SimpleChains.init_params(chain, T; rng = Xoshiro(seed)))
+    l = fill(T(-Inf), length(v))
+    u = fill(T(Inf), length(v))
+    _check_nn_prior(prior, name, length(v))
+    # SimpleChains parameters are already flat; the `reconstructor` field is unused for this
+    # backend (the model-function builder in FixedEffects.jl calls `chain(x, θ)` directly), so
+    # it is set to `identity`.
+    return NNParameters{T, typeof(v), typeof(chain), typeof(identity)}(name, function_name, chain, v, identity, l, u, prior, calculate_se)
 end
 
 """

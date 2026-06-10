@@ -24,6 +24,9 @@ examples/
 # Claude Code files (local, not tracked)
 .claude/
 
+# Codex / other AI-tooling files (local, not tracked)
+.codex
+
 # Local scratch space (test scripts, logs, throwaway environments)
 tmp/
 

@@ -30,7 +30,7 @@ Use the accessor functions to retrieve individual components:
 [`get_uq_diagnostics`](@ref).
 
 Fields:
-- `backend::Symbol`: UQ backend used (`:wald`, `:chain`, or `:profile`).
+- `backend::Symbol`: UQ backend used (`:wald`, `:chain`, `:profile`, or `:mcmc_refit`).
 - `source_method::Symbol`: estimation method of the source fit result.
 - `parameter_names::Vector{Symbol}`: names on the transformed scale.
 - `parameter_names_natural::Union{Nothing, Vector{Symbol}}`: names on the natural scale,
