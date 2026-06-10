@@ -1,3 +1,4 @@
+```@raw html
 ---
 layout: home
 
@@ -29,6 +30,7 @@ features:
   - title: Rich hierarchical variability
     details: Heavy-tailed, skewed, and normalizing-flow random-effect distributions, optionally parameterized by covariates and learned functions.
 ---
+```
 
 ## Why NoLimits.jl?
 
