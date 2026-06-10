@@ -199,39 +199,13 @@ function _eval_individual_obs(dm::DataModel, idx::Int, θ, η_ind, cache::_LLCac
     vary_cache = cache.vary_cache === nothing ? nothing : cache.vary_cache[idx]
     η_ind isa NamedTuple && (η_ind = ComponentArray(η_ind))
 
-    # ODE solving — identical to _loglikelihood_individual
+    # ODE solving — shared scaffolding with _loglikelihood_individual (the preDE
+    # NamedTuple is computed once and reused for the compile context and u0).
     sol_accessors = nothing
     if model.de.de !== nothing
         pre = calculate_prede(model, θ, η_ind, const_cov)
-        pc = (;
-            fixed_effects=θ, random_effects=η_ind, constant_covariates=const_cov,
-            varying_covariates=merge((t=ind.series.vary.t[1],), ind.series.dyn),
-            helpers=cache.helpers, model_funs=cache.model_funs, preDE=pre)
-        compiled = get_de_compiler(model.de.de)(pc)
-        u0 = calculate_initial_state(model, θ, η_ind, const_cov)
-        cb = nothing
-        infusion_rates = nothing
-        if ind.callbacks !== nothing
-            _apply_initial_events!(u0, ind.callbacks)
-            cb = ind.callbacks.callback
-            infusion_rates = ind.callbacks.infusion_rates
-        end
-        # Flat-vector solve parameters via DERHSFlat — must match the
-        # _loglikelihood_individual template layout (shared cache.prob_templates).
-        layout, plen = _flat_layout(compiled.vars)
-        f!_use = _with_infusion(DERHSFlat(get_de_f!(model.de.de), layout, compiled.funs), infusion_rates)
-        T    = promote_type(eltype(θ), eltype(η_ind), eltype(u0))
-        p_flat = _flat_pack(compiled.vars, layout, plen, T)
-        prob = cache.prob_templates === nothing ? nothing : cache.prob_templates[idx]
-        if prob === nothing
-            saveat_use = _ll_saveat(cache, idx, ind)
-            prob = _ll_build_prob_template(f!_use, u0, ind.tspan, p_flat, cb, saveat_use)
-        end
-        u0_T = eltype(u0) === T ? u0 : T.(u0)
-        prob = remake(prob; u0=u0_T, p=p_flat)
-        sol = _ll_ode_solve_baked(cache, prob)
-        SciMLBase.successful_retcode(sol) || return DataFrame()
-        sol_accessors = get_de_accessors_builder(model.de.de)(sol, compiled)
+        sol_accessors = _ll_solve_de(dm, idx, θ, η_ind, cache, pre)
+        sol_accessors === nothing && return DataFrame()
     end
 
     obs_cols   = dm.config.obs_cols

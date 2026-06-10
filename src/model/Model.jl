@@ -387,6 +387,20 @@ function calculate_initial_state(m::Model,
     return builder(θ, η, const_covariates_i, model_funs, helpers, pre)
 end
 
+# Internal pre-aware twin of `calculate_initial_state`: the estimation hot paths
+# compute the preDE NamedTuple once per individual evaluation and reuse it for the
+# initial state, the DE compile context, and every formula row, instead of
+# re-deriving it inside each call.
+function _initial_state_with_pre(m::Model,
+                                 θ::ComponentArray,
+                                 η::ComponentArray,
+                                 const_covariates_i::NamedTuple,
+                                 pre)
+    m.de.de === nothing && error("calculate_initial_state requires a @DifferentialEquation block.")
+    m.de.initial_builder === nothing && error("calculate_initial_state requires a @initialDE block.")
+    return m.de.initial_builder(θ, η, const_covariates_i, get_model_funs(m), get_helper_funs(m), pre)
+end
+
 """
     calculate_formulas_all(m::Model, θ, η, const_covariates_i, varying_covariates,
                            sol_accessors=NamedTuple()) -> NamedTuple

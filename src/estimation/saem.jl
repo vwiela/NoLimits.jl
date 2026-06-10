@@ -2989,6 +2989,9 @@ function _fit_model(dm::DataModel, method::SAEM, args...;
         end
     end
 
+    # Last computed observed-data log-likelihood, re-shown by the progress bar /
+    # verbose log between `obsLL_every`-gated evaluations.
+    obsLL_display = T0(NaN)
     for iter in 1:method.saem.maxiters
         γ = _saem_gamma_schedule(iter, method.saem)
         sched_phase = _saem_schedule_phase(iter, method.saem)
@@ -3393,13 +3396,17 @@ function _fit_model(dm::DataModel, method::SAEM, args...;
         # _saem_obsLL is a full-data observed-likelihood sweep (one ODE solve per
         # individual for ODE models). Only evaluate it when something actually consumes
         # the value — the diagnostics history, the verbose log, or the progress bar —
-        # rather than unconditionally every iteration (it is discarded when all display
-        # is disabled).
+        # and respect `obsLL_every` for the display consumers too (the bar/log re-show
+        # the last computed value in between), so users can cut this extra full data
+        # pass per iteration without disabling the progress display.
         store_obsLL_now = method.saem.store_obsLL && iter % method.saem.obsLL_every == 0
-        need_obsLL = store_obsLL_now || method.saem.verbose || method.saem.progress
-        obsLL_new = need_obsLL ?
-            T0(_saem_obsLL(dm, batch_infos, θu_new, const_cache, ll_cache, b_current)) :
-            T0(NaN)
+        display_obsLL_now = (method.saem.verbose || method.saem.progress) &&
+                            iter % method.saem.obsLL_every == 0
+        need_obsLL = store_obsLL_now || display_obsLL_now
+        if need_obsLL
+            obsLL_display = T0(_saem_obsLL(dm, batch_infos, θu_new, const_cache, ll_cache, b_current))
+        end
+        obsLL_new = obsLL_display
         if store_obsLL_now
             push!(diag.obsLL_hist, obsLL_new)
         end

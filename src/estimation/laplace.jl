@@ -620,11 +620,32 @@ function _laplace_lhs_draws_mvnormal(dist, n::Int, rng::AbstractRNG, dim::Int)
     return out
 end
 
+# Robustness wrapper: RE-distribution construction can throw on a numerically
+# degenerate θ the outer optimiser steps into (e.g. a singular Ω, even on the
+# cholesky scale via exp-underflow). Fall back to a zero start — the subsequent
+# logf evaluation returns -Inf and the optimiser backtracks instead of the whole
+# fit crashing (mirrors the `_laplace_logf_batch` exception policy).
 function _laplace_default_b0(dm::DataModel,
                              batch_info::_LaplaceBatchInfo,
                              θ::ComponentArray,
                              const_cache::LaplaceConstantsCache,
                              cache::_LLCache)
+    try
+        return _laplace_default_b0_impl(dm, batch_info, θ, const_cache, cache)
+    catch err
+        if err isa LinearAlgebra.PosDefException || err isa LinearAlgebra.SingularException ||
+           err isa DomainError || err isa ArgumentError
+            return zeros(eltype(θ), max(batch_info.n_b, 0))
+        end
+        rethrow(err)
+    end
+end
+
+function _laplace_default_b0_impl(dm::DataModel,
+                                  batch_info::_LaplaceBatchInfo,
+                                  θ::ComponentArray,
+                                  const_cache::LaplaceConstantsCache,
+                                  cache::_LLCache)
     nb = batch_info.n_b
     nb == 0 && return Float64[]
     T = eltype(θ)
@@ -668,6 +689,29 @@ function _laplace_sample_b0s(dm::DataModel,
     T = eltype(θ)
     nb = batch_info.n_b
     nb == 0 && return [T[] for _ in 1:n]
+    # On a numerically degenerate θ (see `_laplace_default_b0`) keep the zero
+    # candidates instead of crashing — the logf screening discards bad starts.
+    try
+        return _laplace_sample_b0s_impl(dm, batch_info, θ, const_cache, cache, rng, n, sampling)
+    catch err
+        if err isa LinearAlgebra.PosDefException || err isa LinearAlgebra.SingularException ||
+           err isa DomainError || err isa ArgumentError
+            return [zeros(T, nb) for _ in 1:n]
+        end
+        rethrow(err)
+    end
+end
+
+function _laplace_sample_b0s_impl(dm::DataModel,
+                                  batch_info::_LaplaceBatchInfo,
+                                  θ::ComponentArray,
+                                  const_cache::LaplaceConstantsCache,
+                                  cache::_LLCache,
+                                  rng::AbstractRNG,
+                                  n::Int,
+                                  sampling::Symbol)
+    T = eltype(θ)
+    nb = batch_info.n_b
     b0s = [zeros(T, nb) for _ in 1:n]
     model_funs = cache.model_funs
     helpers = cache.helpers
@@ -1221,11 +1265,13 @@ function _laplace_compute_bstar_batch!(cache::_LaplaceCache,
     end
     b0_default = _laplace_default_b0(dm, info, θ_val, const_cache, ll_cache)
     b_start = b0_default
+    warm_start_usable = false
     if cache.bstar_cache.has_bstar[bi]
         b_prev = cache.bstar_cache.b_star[bi]
         if length(b_prev) == nb
             f_prev = _laplace_logf_batch(dm, info, θ_val, b_prev, const_cache, ll_cache)
             f_def = _laplace_logf_batch(dm, info, θ_val, b0_default, const_cache, ll_cache)
+            warm_start_usable = isfinite(f_prev)
             if f_prev > f_def
                 b_start = b_prev
             end
@@ -1285,7 +1331,18 @@ function _laplace_compute_bstar_batch!(cache::_LaplaceCache,
         end
     end
     use_mcmc = mcmc_candidates !== nothing && size(mcmc_candidates, 2) > 0
-    if g_best_norm > multistart.grad_tol && multistart.k > 0 && (multistart.n > 0 || use_mcmc)
+    # The inner multistart fires on cold starts (no usable previous mode for this
+    # batch), on failed/non-finite solves, or when MCMC candidates were explicitly
+    # provided. With a finite warm start the LBFGS refinement tracks the
+    # conditional mode as θ moves through the outer line search; prior-drawn
+    # candidates were measured to consume the bulk of every ODE objective
+    # evaluation without improving the result (the gradient tolerance often sits
+    # at the ODE solver-noise floor). The thorough multistart still runs wherever
+    # no warm start exists — the first outer evaluation, the final-EBE pass,
+    # rescue passes, and `reestimate_ebes` (all of which build fresh b*-caches).
+    multistart_allowed = use_mcmc || !warm_start_usable ||
+                         !isfinite(best_f) || !isfinite(g_best_norm)
+    if multistart_allowed && g_best_norm > multistart.grad_tol && multistart.k > 0 && (multistart.n > 0 || use_mcmc)
         n_mcmc_stored = use_mcmc ? size(mcmc_candidates, 2) : 0
         n = use_mcmc ? max(multistart.n, n_mcmc_stored) : multistart.n
         k = multistart.k

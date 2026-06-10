@@ -425,14 +425,20 @@ macro randomEffects(block)
     var_syms = Set([s for s in var_syms if !(isdefined(@__MODULE__, s) && getfield(@__MODULE__, s) isa Module)])
     var_syms = Set([s for s in var_syms if !(isdefined(Base, s) && getfield(Base, s) isa Module)])
 
-    prop_syms_expr = Expr(:call, :Set, Expr(:vect, QuoteNode.(collect(prop_syms))...))
+    # `sym in prop_syms` is decidable at macro-expansion time — emit the chosen
+    # branch directly. (The old code carried the membership test into the
+    # generated function as `sym in Set([...])`, allocating a fresh Set on every
+    # builder invocation — and the builder runs per RE level per log-density
+    # evaluation in the estimation hot paths.)
     binds_vars = [
-        quote
-            if $(QuoteNode(sym)) in $prop_syms_expr
+        if sym in prop_syms
+            quote
                 if hasproperty(constant_features_i, $(QuoteNode(sym)))
                     $(sym) = getproperty(constant_features_i, $(QuoteNode(sym)))
                 end
-            else
+            end
+        else
+            quote
                 if hasproperty(constant_features_i, $(QuoteNode(sym)))
                     $(sym) = getproperty(constant_features_i, $(QuoteNode(sym)))
                 elseif hasproperty(fixed_effects, $(QuoteNode(sym)))

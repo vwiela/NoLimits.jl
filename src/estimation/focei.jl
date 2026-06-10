@@ -208,7 +208,13 @@ end
 #    returning the distribution objects instead of summing log-densities).
 # -------------------------------------------------------------------------------------
 
-function _focei_collect_obs_dists!(out::Vector, dm::DataModel, idx::Int, θ, η_ind, cache::_LLCache)
+# Shared per-individual scaffolding for the FOCEI observation collectors:
+# solve the DE (if any) reusing the precomputed `pre`, hoist the row-constant
+# formula context, and hand the row loop to `rows_f!` behind a function barrier
+# (mirrors `_loglikelihood_individual`). `rows_f!` is called as
+# `rows_f!(out, obs_f, ctx, sol_acc, const_cov, obs_series, vrows, obs_cols)`.
+function _focei_collect_obs!(rows_f!::RF, out::Vector, dm::DataModel, idx::Int,
+                             θ, η_ind, cache::_LLCache) where {RF}
     model = dm.model
     ind = dm.individuals[idx]
     obs_rows = dm.row_groups.obs_rows[idx]
@@ -220,65 +226,64 @@ function _focei_collect_obs_dists!(out::Vector, dm::DataModel, idx::Int, θ, η_
     end
 
     sol_accessors = nothing
+    pre = nothing
     if model.de.de !== nothing
         pre = calculate_prede(model, θ, η_ind, const_cov)
-        pc = (;
-            fixed_effects = θ,
-            random_effects = η_ind,
-            constant_covariates = const_cov,
-            varying_covariates = merge((t = ind.series.vary.t[1],), ind.series.dyn),
-            helpers = cache.helpers,
-            model_funs = cache.model_funs,
-            preDE = pre
-        )
-        compiled = get_de_compiler(model.de.de)(pc)
-        u0 = calculate_initial_state(model, θ, η_ind, const_cov)
-        cb = nothing
-        infusion_rates = nothing
-        if ind.callbacks !== nothing
-            _apply_initial_events!(u0, ind.callbacks)
-            cb = ind.callbacks.callback
-            infusion_rates = ind.callbacks.infusion_rates
-        end
-        # Flat-vector solve parameters via DERHSFlat — must match the
-        # _loglikelihood_individual template layout (shared cache.prob_templates).
-        layout, plen = _flat_layout(compiled.vars)
-        f!_use = _with_infusion(DERHSFlat(get_de_f!(model.de.de), layout, compiled.funs), infusion_rates)
-        T = promote_type(eltype(θ), eltype(η_ind), eltype(u0))
-        p_flat = _flat_pack(compiled.vars, layout, plen, T)
-        prob = cache.prob_templates === nothing ? nothing : cache.prob_templates[idx]
-        if prob === nothing
-            saveat_use = _ll_saveat(cache, idx, ind)
-            prob = _ll_build_prob_template(f!_use, u0, ind.tspan, p_flat, cb, saveat_use)
-            if cache.prob_templates !== nothing
-                cache.prob_templates[idx] = prob
-            end
-        end
-        u0_T = eltype(u0) === T ? u0 : T.(u0)
-        prob = remake(prob; u0 = u0_T, p = p_flat)
-        sol = _ll_ode_solve_baked(cache, prob)
-        SciMLBase.successful_retcode(sol) || return false
-        sol_accessors = get_de_accessors_builder(model.de.de)(sol, compiled)
+        sol_accessors = _ll_solve_de(dm, idx, θ, η_ind, cache, pre)
+        sol_accessors === nothing && return false
     end
 
     obs_cols = dm.config.obs_cols
-    rowwise_re = _needs_rowwise_random_effects(dm, idx; obs_only=true)
-    for i in eachindex(obs_rows)
-        vary = vary_cache === nothing ?
-               _varying_at(dm, ind, i, _get_col(dm.df, dm.config.time_col)[obs_rows]) :
-               vary_cache[i]
-        η_row = _row_random_effects_at(dm, idx, i, η_ind, rowwise_re; obs_only=true)
-        obs = sol_accessors === nothing ?
-              calculate_formulas_obs(model, θ, η_row, const_cov, vary) :
-              calculate_formulas_obs(model, θ, η_row, const_cov, vary, sol_accessors)
+    if _needs_rowwise_random_effects(dm, idx; obs_only=true)
+        # Per-row η selection (rare; non-DE only) — keep the dynamic path.
+        t_obs = vary_cache === nothing ? _get_col(dm.df, dm.config.time_col)[obs_rows] : nothing
+        for i in eachindex(obs_rows)
+            vary = vary_cache === nothing ? _varying_at(dm, ind, i, t_obs) : vary_cache[i]
+            η_row = _row_random_effects_at(dm, idx, i, η_ind, true; obs_only=true)
+            obs = sol_accessors === nothing ?
+                  calculate_formulas_obs(model, θ, η_row, const_cov, vary) :
+                  calculate_formulas_obs(model, θ, η_row, const_cov, vary, sol_accessors)
+            for col in obs_cols
+                y = getfield(obs_series, col)[i]
+                y === missing && continue
+                _focei_collect_push!(out, getproperty(obs, col))
+            end
+        end
+        return true
+    end
+
+    pre === nothing && (pre = calculate_prede(model, θ, η_ind, const_cov))
+    ctx = (; fixed_effects = θ, random_effects = η_ind, prede = pre,
+            helpers = cache.helpers, model_funs = cache.model_funs)
+    vrows = vary_cache !== nothing ? vary_cache :
+            _build_vary_cache_individual(ind.series.vary, ind.series.dyn,
+                                         _get_col(dm.df, dm.config.time_col)[obs_rows],
+                                         length(obs_rows))
+    sol_acc = sol_accessors === nothing ? NamedTuple() : sol_accessors
+    rows_f!(out, model.formulas.obs, ctx, sol_acc, const_cov, obs_series, vrows, obs_cols)
+    return true
+end
+
+# Element push dispatch: distribution objects for the dists collector, flattened
+# native parameters for the typed Jacobian target.
+@inline _focei_collect_push!(out::Vector{Any}, dist) = push!(out, dist)
+@inline _focei_collect_push!(out::Vector{T}, dist) where {T<:Real} = append!(out, _focei_params(dist))
+
+function _focei_rows_push!(out::Vector, obs_f::F, ctx::C, sol_acc::SA, const_cov::CC,
+                           obs_series::OS, vrows::Vector{V}, obs_cols) where {F, C, SA, CC, OS, V}
+    for i in eachindex(vrows)
+        obs = obs_f(ctx, sol_acc, const_cov, vrows[i])
         for col in obs_cols
             y = getfield(obs_series, col)[i]
             y === missing && continue
-            push!(out, getproperty(obs, col))
+            _focei_collect_push!(out, getproperty(obs, col))
         end
     end
-    return true
+    return nothing
 end
+
+_focei_collect_obs_dists!(out::Vector, dm::DataModel, idx::Int, θ, η_ind, cache::_LLCache) =
+    _focei_collect_obs!(_focei_rows_push!, out, dm, idx, θ, η_ind, cache)
 
 # Returns a Vector of the outcome distributions for every (non-missing) observation in
 # the batch, in a fixed order.
@@ -293,13 +298,20 @@ function _focei_obs_dists_batch(dm::DataModel, batch_info::_LaplaceBatchInfo, θ
     return out
 end
 
-# Stacked outcome-distribution parameters Φ(b) — the Jacobian target.
+# Stacked outcome-distribution parameters Φ(b) — the Jacobian target. Collected
+# straight into a concretely-typed vector (this function runs under ForwardDiff
+# duals once per Jacobian chunk; the old Vector{Any}-of-dists + reduce(vcat)
+# route boxed every distribution and re-allocated the stack repeatedly).
 function _focei_obs_params_batch(dm::DataModel, batch_info::_LaplaceBatchInfo, θ_re::ComponentArray,
                                  b, const_cache::LaplaceConstantsCache, cache::_LLCache)
-    dists = _focei_obs_dists_batch(dm, batch_info, θ_re, b, const_cache, cache)
     T = promote_type(eltype(θ_re), eltype(b))
-    isempty(dists) && return Vector{T}()
-    return reduce(vcat, (_focei_params(d) for d in dists))
+    out = Vector{T}()
+    for i in batch_info.inds
+        η_ind = _build_eta_ind(dm, i, batch_info, b, const_cache, θ_re)
+        ok = _focei_collect_obs!(_focei_rows_push!, out, dm, i, θ_re, η_ind, cache)
+        ok || return Vector{T}()
+    end
+    return out
 end
 
 struct _FOCEIPhi{DM, INFO, TH, CC, CA}
@@ -324,8 +336,25 @@ end
 # 3. Prior mean mᵢ in b-space (FOCE freezes dispersion parameters here).
 # -------------------------------------------------------------------------------------
 
+# Robustness wrapper: distribution construction can throw on a numerically
+# degenerate θ the outer optimiser steps into (e.g. a singular Ω) — fall back to
+# the zero vector so the subsequent evaluations return -Inf and the optimiser
+# backtracks instead of crashing the fit (mirrors `_laplace_logf_batch`).
 function _focei_prior_mean_b(dm::DataModel, batch_info::_LaplaceBatchInfo, θ_re::ComponentArray,
                              const_cache::LaplaceConstantsCache, cache::_LLCache)
+    try
+        return _focei_prior_mean_b_impl(dm, batch_info, θ_re, const_cache, cache)
+    catch err
+        if err isa LinearAlgebra.PosDefException || err isa LinearAlgebra.SingularException ||
+           err isa DomainError || err isa ArgumentError
+            return zeros(eltype(θ_re), batch_info.n_b)
+        end
+        rethrow(err)
+    end
+end
+
+function _focei_prior_mean_b_impl(dm::DataModel, batch_info::_LaplaceBatchInfo, θ_re::ComponentArray,
+                                  const_cache::LaplaceConstantsCache, cache::_LLCache)
     nb = batch_info.n_b
     T = eltype(θ_re)
     m = zeros(T, nb)
@@ -362,9 +391,61 @@ end
 #    Returns the positive-(semi)definite precision 𝓗 = Σ Jⱼᵀ ℐ(φⱼ) Jⱼ − ∇²_b log π.
 # -------------------------------------------------------------------------------------
 
+# Diagonal Fisher information for the families where ℐ(φ) is diagonal — all the
+# registered scalar families except Gamma and Beta (and the matrix-valued
+# MvNormal). For these the data term Σⱼ Jⱼᵀ ℐⱼ Jⱼ collapses to Jᵀ(w .* J) with
+# one weight per stacked parameter row: a single broadcast + GEMM instead of
+# per-observation slices and matrix temporaries.
+_focei_diag_information(d::Normal) = (iv = inv(d.σ * d.σ); (iv, 2iv))
+_focei_diag_information(d::LogNormal) = (iv = inv(d.σ * d.σ); (iv, 2iv))
+_focei_diag_information(d::Distributions.Laplace) = (ib = inv(d.θ * d.θ); (ib, ib))
+_focei_diag_information(d::Cauchy) = (ih = inv(2 * d.σ * d.σ); (ih, ih))
+_focei_diag_information(d::Exponential) = (inv(d.θ * d.θ),)
+_focei_diag_information(d::Poisson) = (inv(d.λ),)
+_focei_diag_information(d::Bernoulli) = (inv(d.p * (one(d.p) - d.p)),)
+_focei_diag_information(d::Binomial) = (d.n * inv(d.p * (one(d.p) - d.p)),)
+_focei_diag_information(d::Geometric) = (inv(d.p * d.p * (one(d.p) - d.p)),)
+_focei_diag_information(::Any) = nothing
+
 function _focei_data_term(J, dists_b::Vector, dists_m, interaction::Bool, T::Type)
     nb = size(J, 2)
     isempty(dists_b) && return zeros(T, nb, nb)
+    # Diagonal-ℐ fast path. FOCE freezes dispersion parameters by zeroing their
+    # rows of Jⱼ and evaluating ℐ at the prior-mean distribution; with diagonal ℐ
+    # both effects reduce to the weight vector (Mᵀ ℐ M = diag of kept weights).
+    w = Vector{T}(undef, size(J, 1))
+    diag_ok = true
+    offset = 0
+    for (j, d) in enumerate(dists_b)
+        if interaction
+            # FOCEI: ℐ evaluated at the conditional-mode distribution, no
+            # dispersion freeze — skip the (allocating) dispersion-index lookup.
+            di = _focei_diag_information(d)
+            if di === nothing
+                diag_ok = false
+                break
+            end
+            for k in eachindex(di)
+                w[offset + k] = T(di[k])
+            end
+            offset += length(di)
+        else
+            disp = _focei_dispersion_indices(d)
+            use_d = !isempty(disp) ? dists_m[j] : d
+            di = _focei_diag_information(use_d)
+            if di === nothing
+                diag_ok = false
+                break
+            end
+            for k in eachindex(di)
+                w[offset + k] = k in disp ? zero(T) : T(di[k])
+            end
+            offset += length(di)
+        end
+    end
+    if diag_ok && offset == size(J, 1)
+        return transpose(J) * (w .* J)
+    end
     terms = Matrix{T}[]
     offset = 0
     for (j, d) in enumerate(dists_b)

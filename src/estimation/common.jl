@@ -1730,6 +1730,63 @@ function _ll_ode_solve_baked(cache::_LLCache, prob)
     return solve(prob, cache.alg, cache.ode_args...; solve_kwargs...)
 end
 
+# Shared DE-solve scaffolding for the per-individual evaluators
+# (`_loglikelihood_individual`, `_resid_stats_individual*`, the FOCEI obs
+# collectors, and the CV row collector). `pre` is the precomputed preDE
+# NamedTuple — row-constant, reused for the compile context and the initial
+# state instead of being re-derived inside each call. Returns the sol_accessors
+# NamedTuple, or `nothing` when the solve failed.
+function _ll_solve_de(dm::DataModel, idx::Int, θ, η_ind, cache::_LLCache, pre)
+    model = dm.model
+    ind = dm.individuals[idx]
+    const_cov = ind.const_cov
+    pc = (;
+        fixed_effects = θ,
+        random_effects = η_ind,
+        constant_covariates = const_cov,
+        varying_covariates = merge((t = ind.series.vary.t[1],), ind.series.dyn),
+        helpers = cache.helpers,
+        model_funs = cache.model_funs,
+        preDE = pre
+    )
+    compiled = get_de_compiler(model.de.de)(pc)
+    u0 = _initial_state_with_pre(model, θ, η_ind, const_cov, pre)
+    cb = nothing
+    infusion_rates = nothing
+    if ind.callbacks !== nothing
+        _apply_initial_events!(u0, ind.callbacks)
+        cb = ind.callbacks.callback
+        infusion_rates = ind.callbacks.infusion_rates
+    end
+    # Solve parameters travel as a flat numeric Vector (DERHSFlat adapter):
+    # plain-vector `prob.p` is the only carrier Enzyme's reverse adjoint route
+    # handles correctly. Same generated RHS kernel — numerically equivalent
+    # (ulp-level fp-contraction differences from the changed inlining context
+    # can shift adaptive step sequences by ~1e-15; well inside solver tolerance).
+    # `funs` (interpolants/model funs/helpers) are evaluation-constant per
+    # individual, so caching the adapter inside the problem template is sound.
+    layout, plen = _flat_layout(compiled.vars)
+    f!_use = _with_infusion(DERHSFlat(get_de_f!(model.de.de), layout, compiled.funs), infusion_rates)
+    # T must cover the vars eltype too (η/θ can enter the RHS without entering
+    # u0) — pack once with the promoted type, reuse for template and remake.
+    T = promote_type(eltype(θ), eltype(η_ind), eltype(u0))
+    p_flat = _flat_pack(compiled.vars, layout, plen, T)
+    prob = cache.prob_templates === nothing ? nothing : cache.prob_templates[idx]
+    if prob === nothing
+        saveat_use = _ll_saveat(cache, idx, ind)
+        prob = _ll_build_prob_template(f!_use, u0, ind.tspan, p_flat, cb, saveat_use)
+        if cache.prob_templates !== nothing
+            cache.prob_templates[idx] = prob
+        end
+    end
+
+    u0_T = eltype(u0) === T ? u0 : T.(u0)
+    prob = remake(prob; u0 = u0_T, p = p_flat)
+    sol = _ll_ode_solve_baked(cache, prob)
+    SciMLBase.successful_retcode(sol) || return nothing
+    return get_de_accessors_builder(model.de.de)(sol, compiled)
+end
+
 function _loglikelihood_individual(dm::DataModel, idx::Int, θ, η_ind, cache::_LLCache)
     model = dm.model
     ind = dm.individuals[idx]
@@ -1742,67 +1799,88 @@ function _loglikelihood_individual(dm::DataModel, idx::Int, θ, η_ind, cache::_
     end
 
     sol_accessors = nothing
+    pre = nothing
     if model.de.de !== nothing
         pre = calculate_prede(model, θ, η_ind, const_cov)
-        pc = (;
-            fixed_effects = θ,
-            random_effects = η_ind,
-            constant_covariates = const_cov,
-            varying_covariates = merge((t = ind.series.vary.t[1],), ind.series.dyn),
-            helpers = cache.helpers,
-            model_funs = cache.model_funs,
-            preDE = pre
-        )
-        compiled = get_de_compiler(model.de.de)(pc)
-        u0 = calculate_initial_state(model, θ, η_ind, const_cov)
-        cb = nothing
-        infusion_rates = nothing
-        if ind.callbacks !== nothing
-            _apply_initial_events!(u0, ind.callbacks)
-            cb = ind.callbacks.callback
-            infusion_rates = ind.callbacks.infusion_rates
-        end
-        # Solve parameters travel as a flat numeric Vector (DERHSFlat adapter):
-        # plain-vector `prob.p` is the only carrier Enzyme's reverse adjoint route
-        # handles correctly. Same generated RHS kernel — numerically equivalent
-        # (ulp-level fp-contraction differences from the changed inlining context
-        # can shift adaptive step sequences by ~1e-15; well inside solver tolerance).
-        # `funs` (interpolants/model funs/helpers) are evaluation-constant per
-        # individual, so caching the adapter inside the problem template is sound.
-        layout, plen = _flat_layout(compiled.vars)
-        f!_use = _with_infusion(DERHSFlat(get_de_f!(model.de.de), layout, compiled.funs), infusion_rates)
-        # T must cover the vars eltype too (η/θ can enter the RHS without entering
-        # u0) — pack once with the promoted type, reuse for template and remake.
-        T = promote_type(eltype(θ), eltype(η_ind), eltype(u0))
-        p_flat = _flat_pack(compiled.vars, layout, plen, T)
-        prob = cache.prob_templates === nothing ? nothing : cache.prob_templates[idx]
-        if prob === nothing
-            saveat_use = _ll_saveat(cache, idx, ind)
-            prob = _ll_build_prob_template(f!_use, u0, ind.tspan, p_flat, cb, saveat_use)
-            if cache.prob_templates !== nothing
-                cache.prob_templates[idx] = prob
-            end
-        end
-
-        u0_T = eltype(u0) === T ? u0 : T.(u0)
-        prob = remake(prob; u0 = u0_T, p = p_flat)
-        sol = _ll_ode_solve_baked(cache, prob)
-        SciMLBase.successful_retcode(sol) || return -Inf
-        sol_accessors = get_de_accessors_builder(model.de.de)(sol, compiled)
+        sol_accessors = _ll_solve_de(dm, idx, θ, η_ind, cache, pre)
+        sol_accessors === nothing && return -Inf
     end
 
+    # Rowwise-varying random effects (multiple RE levels within one individual;
+    # only possible for non-DE models) need a per-row η and keep the original
+    # per-row path. The common case hoists all row-constant context (preDE,
+    # formula ctx, vary rows) out of the loop and runs the rows behind a function
+    # barrier, so every row evaluation is statically dispatched and
+    # allocation-free instead of boxing through `Any`-inferred dynamic calls.
+    if _needs_rowwise_random_effects(dm, idx; obs_only=true)
+        return _loglikelihood_individual_rowwise(dm, idx, θ, η_ind, cache, sol_accessors)
+    end
+    pre === nothing && (pre = calculate_prede(model, θ, η_ind, const_cov))
+    ctx = (; fixed_effects = θ, random_effects = η_ind, prede = pre,
+            helpers = cache.helpers, model_funs = cache.model_funs)
+    vrows = vary_cache !== nothing ? vary_cache :
+            _build_vary_cache_individual(ind.series.vary, ind.series.dyn,
+                                         _get_col(dm.df, dm.config.time_col)[obs_rows],
+                                         length(obs_rows))
+    sol_acc = sol_accessors === nothing ? NamedTuple() : sol_accessors
+    T_el = promote_type(eltype(θ), eltype(η_ind))
+    return _ll_rows_obs(dm, idx, θ, η_ind, cache, sol_accessors,
+                        model.formulas.obs, ctx, sol_acc, const_cov, obs_series,
+                        vrows, dm.config.obs_cols, T_el)
+end
+
+# Row loop of `_loglikelihood_individual` behind a function barrier: every
+# argument arrives concretely typed, so the formulas RGF call, the observation
+# field accesses, and the logpdf evaluations all dispatch statically.
+# HMM-free fast path. Filtering state created lazily inside this loop would be
+# loop-carried (phi nodes reverse-mode Enzyme cannot invert), so rows are processed
+# assuming no HMM outcome; the first row that produces one hands all remaining rows
+# to `_loglikelihood_rows_hmm`, which allocates its state once up front. Non-HMM
+# models never allocate any filtering state.
+function _ll_rows_obs(dm::DataModel, idx::Int, θ, η_ind, cache::_LLCache, sol_accessors,
+                      obs_f::F, ctx::C, sol_acc::SA, const_cov::CC, obs_series::OS,
+                      vrows::Vector{V}, obs_cols, ::Type{T}) where {F, C, SA, CC, OS, V, T}
+    ll = zero(T)
+    for i in eachindex(vrows)
+        obs = obs_f(ctx, sol_acc, const_cov, vrows[i])
+        if _row_has_hmm_dist(obs, obs_cols)
+            ll_hmm = _loglikelihood_rows_hmm(dm, idx, θ, η_ind, cache, sol_accessors, i)
+            isfinite(ll_hmm) || return T(-Inf)
+            return ll + ll_hmm
+        end
+        for col in obs_cols
+            y = getfield(obs_series, col)[i]
+            y === missing && continue
+            dist = getproperty(obs, col)
+            v = _fast_logpdf(dist, y)
+            v === nothing && (v = logpdf(dist, y))
+            if !isfinite(v)
+                return T(-Inf)
+            end
+            ll += v
+        end
+    end
+    return ll
+end
+
+# Original per-row path for individuals whose random effects vary across rows
+# (multiple RE levels within one individual; non-DE models only). η must be
+# re-selected per row, so the formula context cannot be hoisted.
+function _loglikelihood_individual_rowwise(dm::DataModel, idx::Int, θ, η_ind,
+                                           cache::_LLCache, sol_accessors)
+    model = dm.model
+    ind = dm.individuals[idx]
+    obs_rows = dm.row_groups.obs_rows[idx]
+    const_cov = ind.const_cov
+    obs_series = ind.series.obs
+    vary_cache = cache.vary_cache === nothing ? nothing : cache.vary_cache[idx]
+    t_obs = vary_cache === nothing ? _get_col(dm.df, dm.config.time_col)[obs_rows] : nothing
     T_el = promote_type(eltype(θ), eltype(η_ind))
     ll = zero(T_el)
     obs_cols = dm.config.obs_cols
-    rowwise_re = _needs_rowwise_random_effects(dm, idx; obs_only=true)
-    # HMM-free fast path. Filtering state created lazily inside this loop would be
-    # loop-carried (phi nodes reverse-mode Enzyme cannot invert), so rows are processed
-    # assuming no HMM outcome; the first row that produces one hands all remaining rows
-    # to `_loglikelihood_rows_hmm`, which allocates its state once up front. Non-HMM
-    # models never allocate any filtering state.
     for i in eachindex(obs_rows)
-        vary = vary_cache === nothing ? _varying_at(dm, ind, i, _get_col(dm.df, dm.config.time_col)[obs_rows]) : vary_cache[i]
-        η_row = _row_random_effects_at(dm, idx, i, η_ind, rowwise_re; obs_only=true)
+        vary = vary_cache === nothing ? _varying_at(dm, ind, i, t_obs) : vary_cache[i]
+        η_row = _row_random_effects_at(dm, idx, i, η_ind, true; obs_only=true)
         obs = sol_accessors === nothing ?
               calculate_formulas_obs(model, θ, η_row, const_cov, vary) :
               calculate_formulas_obs(model, θ, η_row, const_cov, vary, sol_accessors)
@@ -1847,13 +1925,26 @@ function _loglikelihood_rows_hmm(dm::DataModel, idx::Int, θ, η_ind, cache::_LL
     hmm_init = Vector{Vector{T_hmm}}(undef, n_cols)
     hmm_has_prior = falses(n_cols)
     hmm_priors = Vector{Vector{T_hmm}}(undef, n_cols)
+    # Row-constant formula context, hoisted like in `_loglikelihood_individual`
+    # (assigned once before the loop — no loop-carried state added). The rowwise
+    # path keeps the per-row η selection and the dynamic formulas entry point.
+    pre = rowwise_re ? nothing : calculate_prede(model, θ, η_ind, const_cov)
+    ctx = rowwise_re ? nothing :
+          (; fixed_effects = θ, random_effects = η_ind, prede = pre,
+             helpers = cache.helpers, model_funs = cache.model_funs)
+    sol_acc = sol_accessors === nothing ? NamedTuple() : sol_accessors
+    t_obs = vary_cache === nothing ? _get_col(dm.df, dm.config.time_col)[obs_rows] : nothing
     ll = zero(T_hmm)
     for i in i_start:length(obs_rows)
-        vary = vary_cache === nothing ? _varying_at(dm, ind, i, _get_col(dm.df, dm.config.time_col)[obs_rows]) : vary_cache[i]
-        η_row = _row_random_effects_at(dm, idx, i, η_ind, rowwise_re; obs_only=true)
-        obs = sol_accessors === nothing ?
-              calculate_formulas_obs(model, θ, η_row, const_cov, vary) :
-              calculate_formulas_obs(model, θ, η_row, const_cov, vary, sol_accessors)
+        vary = vary_cache === nothing ? _varying_at(dm, ind, i, t_obs) : vary_cache[i]
+        obs = if rowwise_re
+            η_row = _row_random_effects_at(dm, idx, i, η_ind, true; obs_only=true)
+            sol_accessors === nothing ?
+                calculate_formulas_obs(model, θ, η_row, const_cov, vary) :
+                calculate_formulas_obs(model, θ, η_row, const_cov, vary, sol_accessors)
+        else
+            model.formulas.obs(ctx, sol_acc, const_cov, vary)
+        end
         for (j, col) in Base.pairs(obs_cols)
             y = getfield(obs_series, col)[i]
             dist = getproperty(obs, col)
@@ -1974,60 +2065,40 @@ function _resid_stats_individual(dm::DataModel, idx::Int, θ, η_ind, cache::_LL
     const_cov = ind.const_cov
     obs_series = ind.series.obs
     vary_cache = cache.vary_cache === nothing ? nothing : cache.vary_cache[idx]
+    if η_ind isa NamedTuple
+        η_ind = ComponentArray(η_ind)
+    end
 
     sol_accessors = nothing
+    pre = nothing
     if model.de.de !== nothing
         pre = calculate_prede(model, θ, η_ind, const_cov)
-        pc = (;
-            fixed_effects = θ,
-            random_effects = η_ind,
-            constant_covariates = const_cov,
-            varying_covariates = merge((t = ind.series.vary.t[1],), ind.series.dyn),
-            helpers = cache.helpers,
-            model_funs = cache.model_funs,
-            preDE = pre
-        )
-        compiled = get_de_compiler(model.de.de)(pc)
-        u0 = calculate_initial_state(model, θ, η_ind, const_cov)
-        cb = nothing
-        infusion_rates = nothing
-        if ind.callbacks !== nothing
-            _apply_initial_events!(u0, ind.callbacks)
-            cb = ind.callbacks.callback
-            infusion_rates = ind.callbacks.infusion_rates
-        end
-        # Flat-vector solve parameters via DERHSFlat — see _loglikelihood_individual.
-        layout, plen = _flat_layout(compiled.vars)
-        f!_use = _with_infusion(DERHSFlat(get_de_f!(model.de.de), layout, compiled.funs), infusion_rates)
-        T = promote_type(eltype(θ), eltype(η_ind), eltype(u0))
-        p_flat = _flat_pack(compiled.vars, layout, plen, T)
-        prob = cache.prob_templates === nothing ? nothing : cache.prob_templates[idx]
-        if prob === nothing
-            saveat_use = _ll_saveat(cache, idx, ind)
-            prob = _ll_build_prob_template(f!_use, u0, ind.tspan, p_flat, cb, saveat_use)
-            if cache.prob_templates !== nothing
-                cache.prob_templates[idx] = prob
-            end
-        end
-
-        u0_T = eltype(u0) === T ? u0 : T.(u0)
-        prob = remake(prob; u0 = u0_T, p = p_flat)
-        sol = _ll_ode_solve_baked(cache, prob)
-        SciMLBase.successful_retcode(sol) || return (zero(promote_type(eltype(θ), Float64)), 0, false)
-        sol_accessors = get_de_accessors_builder(model.de.de)(sol, compiled)
+        sol_accessors = _ll_solve_de(dm, idx, θ, η_ind, cache, pre)
+        sol_accessors === nothing && return (zero(promote_type(eltype(θ), Float64)), 0, false)
     end
 
     resid_ss = zero(promote_type(eltype(θ), Float64))
     resid_n = 0
     obs_cols = dm.config.obs_cols
-    time_col = _get_col(dm.df, dm.config.time_col)[obs_rows]
+    time_col = vary_cache === nothing ? _get_col(dm.df, dm.config.time_col)[obs_rows] : nothing
     rowwise_re = _needs_rowwise_random_effects(dm, idx; obs_only=true)
+    # Row-constant formula context, hoisted as in `_loglikelihood_individual`;
+    # the rowwise path keeps the per-row η selection.
+    pre === nothing && !rowwise_re && (pre = calculate_prede(model, θ, η_ind, const_cov))
+    ctx = rowwise_re ? nothing :
+          (; fixed_effects = θ, random_effects = η_ind, prede = pre,
+             helpers = cache.helpers, model_funs = cache.model_funs)
+    sol_acc = sol_accessors === nothing ? NamedTuple() : sol_accessors
     for i in eachindex(obs_rows)
         vary = vary_cache === nothing ? _varying_at(dm, ind, i, time_col) : vary_cache[i]
-        η_row = _row_random_effects_at(dm, idx, i, η_ind, rowwise_re; obs_only=true)
-        obs = sol_accessors === nothing ?
-              calculate_formulas_obs(model, θ, η_row, const_cov, vary) :
-              calculate_formulas_obs(model, θ, η_row, const_cov, vary, sol_accessors)
+        obs = if rowwise_re
+            η_row = _row_random_effects_at(dm, idx, i, η_ind, true; obs_only=true)
+            sol_accessors === nothing ?
+                calculate_formulas_obs(model, θ, η_row, const_cov, vary) :
+                calculate_formulas_obs(model, θ, η_row, const_cov, vary, sol_accessors)
+        else
+            model.formulas.obs(ctx, sol_acc, const_cov, vary)
+        end
         for col in obs_cols
             dist = getproperty(obs, col)
             dist isa Normal || return (resid_ss, resid_n, false)
@@ -2048,63 +2119,41 @@ function _resid_stats_individual_cols(dm::DataModel, idx::Int, θ, η_ind, cache
     const_cov = ind.const_cov
     obs_series = ind.series.obs
     vary_cache = cache.vary_cache === nothing ? nothing : cache.vary_cache[idx]
+    if η_ind isa NamedTuple
+        η_ind = ComponentArray(η_ind)
+    end
 
     sol_accessors = nothing
+    pre = nothing
     if model.de.de !== nothing
         pre = calculate_prede(model, θ, η_ind, const_cov)
-        pc = (;
-            fixed_effects = θ,
-            random_effects = η_ind,
-            constant_covariates = const_cov,
-            varying_covariates = merge((t = ind.series.vary.t[1],), ind.series.dyn),
-            helpers = cache.helpers,
-            model_funs = cache.model_funs,
-            preDE = pre
-        )
-        compiled = get_de_compiler(model.de.de)(pc)
-        u0 = calculate_initial_state(model, θ, η_ind, const_cov)
-        cb = nothing
-        infusion_rates = nothing
-        if ind.callbacks !== nothing
-            _apply_initial_events!(u0, ind.callbacks)
-            cb = ind.callbacks.callback
-            infusion_rates = ind.callbacks.infusion_rates
-        end
-        # Flat-vector solve parameters via DERHSFlat — see _loglikelihood_individual.
-        layout, plen = _flat_layout(compiled.vars)
-        f!_use = _with_infusion(DERHSFlat(get_de_f!(model.de.de), layout, compiled.funs), infusion_rates)
-        T = promote_type(eltype(θ), eltype(η_ind), eltype(u0))
-        p_flat = _flat_pack(compiled.vars, layout, plen, T)
-        prob = cache.prob_templates === nothing ? nothing : cache.prob_templates[idx]
-        if prob === nothing
-            saveat_use = _ll_saveat(cache, idx, ind)
-            prob = _ll_build_prob_template(f!_use, u0, ind.tspan, p_flat, cb, saveat_use)
-            if cache.prob_templates !== nothing
-                cache.prob_templates[idx] = prob
-            end
-        end
-
-        u0_T = eltype(u0) === T ? u0 : T.(u0)
-        prob = remake(prob; u0 = u0_T, p = p_flat)
-        sol = _ll_ode_solve_baked(cache, prob)
-        SciMLBase.successful_retcode(sol) || return (zeros(promote_type(eltype(θ), Float64), length(dm.config.obs_cols)),
-                                                     zeros(Int, length(dm.config.obs_cols)),
-                                                     false)
-        sol_accessors = get_de_accessors_builder(model.de.de)(sol, compiled)
+        sol_accessors = _ll_solve_de(dm, idx, θ, η_ind, cache, pre)
+        sol_accessors === nothing && return (zeros(promote_type(eltype(θ), Float64), length(dm.config.obs_cols)),
+                                             zeros(Int, length(dm.config.obs_cols)),
+                                             false)
     end
 
     Tss = promote_type(eltype(θ), Float64)
     obs_cols = dm.config.obs_cols
     resid_ss = zeros(Tss, length(obs_cols))
     resid_n = zeros(Int, length(obs_cols))
-    time_col = _get_col(dm.df, dm.config.time_col)[obs_rows]
+    time_col = vary_cache === nothing ? _get_col(dm.df, dm.config.time_col)[obs_rows] : nothing
     rowwise_re = _needs_rowwise_random_effects(dm, idx; obs_only=true)
+    pre === nothing && !rowwise_re && (pre = calculate_prede(model, θ, η_ind, const_cov))
+    ctx = rowwise_re ? nothing :
+          (; fixed_effects = θ, random_effects = η_ind, prede = pre,
+             helpers = cache.helpers, model_funs = cache.model_funs)
+    sol_acc = sol_accessors === nothing ? NamedTuple() : sol_accessors
     for i in eachindex(obs_rows)
         vary = vary_cache === nothing ? _varying_at(dm, ind, i, time_col) : vary_cache[i]
-        η_row = _row_random_effects_at(dm, idx, i, η_ind, rowwise_re; obs_only=true)
-        obs = sol_accessors === nothing ?
-              calculate_formulas_obs(model, θ, η_row, const_cov, vary) :
-              calculate_formulas_obs(model, θ, η_row, const_cov, vary, sol_accessors)
+        obs = if rowwise_re
+            η_row = _row_random_effects_at(dm, idx, i, η_ind, true; obs_only=true)
+            sol_accessors === nothing ?
+                calculate_formulas_obs(model, θ, η_row, const_cov, vary) :
+                calculate_formulas_obs(model, θ, η_row, const_cov, vary, sol_accessors)
+        else
+            model.formulas.obs(ctx, sol_acc, const_cov, vary)
+        end
         for (j, col) in pairs(obs_cols)
             dist = getproperty(obs, col)
             dist isa Normal || return (resid_ss, resid_n, false)
@@ -2297,8 +2346,16 @@ function loglikelihood(dm::DataModel, θ::ComponentArray, η;
     end
 end
 
+# Compile-time check whether any fixed effect is a RealPSDMatrix: lets
+# `_symmetrize_psd_params` return immediately for the (common) no-PSD case
+# instead of running a boxing `getfield(params, name)` loop on every call.
+@generated function _has_psd_params(::NamedTuple{names, T}) where {names, T}
+    return any(p -> p <: RealPSDMatrix, T.parameters) ? :(true) : :(false)
+end
+
 function _symmetrize_psd_params(θ::ComponentArray, fe::FixedEffects)
     params = get_params(fe)
+    _has_psd_params(params) || return θ
     θsym = θ
     for name in get_names(fe)
         p = getfield(params, name)
@@ -2307,7 +2364,10 @@ function _symmetrize_psd_params(θ::ComponentArray, fe::FixedEffects)
             if A isa AbstractMatrix
                 Asym = 0.5 .* (A .+ A')
                 if θsym === θ
-                    θsym = deepcopy(θ)
+                    # Flat data copy + axes rewrap instead of deepcopy:
+                    # `setproperty!` writes values, not containers, so copying
+                    # the underlying vector is sufficient (and much cheaper).
+                    θsym = ComponentArray(copy(ComponentArrays.getdata(θ)), getaxes(θ))
                 end
                 setproperty!(θsym, name, Asym)
             end
