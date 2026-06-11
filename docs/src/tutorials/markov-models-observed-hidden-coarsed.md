@@ -4,7 +4,7 @@ Multi-state models are a natural framework for data in which an individual, syst
 
 A common simplifying assumption is the Markov property: conditional on the current state, the future evolution of the process does not depend on the full past history. In practice, this assumption is often a useful modeling compromise. It captures the local dependence that is most directly observed in longitudinal state data, while keeping the transition structure interpretable and statistically tractable. Covariates, time effects, and subject-level random effects can then be used to explain differences in transition behavior across individuals or experimental units.
 
-In this tutorial, you will use NoLimits.jl to specify and estimate several Markov-type models for longitudinal state data. The examples illustrate how the same general idea — modeling movement through a discrete state space — can be adapted to different observation schemes and assumptions. We will consider four related models: 
+In this tutorial, you will use NoLimits.jl to specify and estimate several Markov-type models for longitudinal state data. The examples illustrate how the same general idea - modeling movement through a discrete state space - can be adapted to different observation schemes and assumptions. We will consider four related models: 
 
 1. An observed Markov model, where the state sequence is directly measured; 
 2. A hidden Markov model, where the observed data are noisy proxies for an underlying latent state process; 

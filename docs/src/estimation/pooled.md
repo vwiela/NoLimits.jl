@@ -27,8 +27,8 @@ plug-in substituted:
 ```
 
 The plug-in ``\tilde\eta_i(\theta)`` is a function of the fixed effects and is **recomputed
-at every objective evaluation**. Consequently, any parameter that shifts the plug-in — for
-example a population mean located *inside* the random-effect distribution — is estimated
+at every objective evaluation**. Consequently, any parameter that shifts the plug-in - for
+example a population mean located *inside* the random-effect distribution - is estimated
 normally. The random-effect prior itself is never evaluated.
 
 ## Automatic Freezing of Non-Contributing Parameters
@@ -45,7 +45,7 @@ likelihood contribution**:
   parameters at every probe point (for example, only the ratio of a `Beta(α, β)` is
   identified from its mean).
 
-The freeze classification — which parameters were held constant and why — is reported in
+The freeze classification - which parameters were held constant and why - is reported in
 [`get_notes`](@ref):
 
 ```julia

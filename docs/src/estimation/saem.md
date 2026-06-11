@@ -317,7 +317,7 @@ SA variance annealing is distinct from `anneal_to_fixed`. The latter collapses a
 
 ### Variance Lower Bound
 
-A hard, permanent lower bound is applied to scalar RE covariance and residual SD parameters after every M-step update. Unlike SA variance annealing, this floor does not decay — it is enforced for the entire run.
+A hard, permanent lower bound is applied to scalar RE covariance and residual SD parameters after every M-step update. Unlike SA variance annealing, this floor does not decay - it is enforced for the entire run.
 
 - `auto_var_lb::Bool = true`: when `true`, automatically applies the lower bound to all scalar RE cov params (Normal, LogNormal, MvNormal scalar covariance) and the residual variance parameter.
 - `var_lb_value::Float64 = 1e-5`: minimum value enforced for the targeted parameters on the natural (untransformed) scale.
@@ -389,9 +389,9 @@ After convergence, SAEM computes empirical Bayes modal estimates of the random e
   - Default: `()` (no annealing).
 - `anneal_schedule`
   - Controls the shape of the SD decay curve. Supported values:
-    - `:exponential` (default) — exponential decay from the initial SD to `anneal_min_sd`.
-    - `:linear` — linear interpolation from the initial SD to `anneal_min_sd`.
-    - `:gamma` — decay tied to the SA gain sequence, using the same `t0` and `kappa` as the main schedule.
+    - `:exponential` (default) - exponential decay from the initial SD to `anneal_min_sd`.
+    - `:linear` - linear interpolation from the initial SD to `anneal_min_sd`.
+    - `:gamma` - decay tied to the SA gain sequence, using the same `t0` and `kappa` as the main schedule.
 - `anneal_min_sd`
   - Target SD reached at the final iteration.
   - Default: `1e-5`.
@@ -486,7 +486,7 @@ Note: Turing-based samplers re-compile the model at each SAEM iteration and are 
 
 ## RE Annealing
 
-The `anneal_to_fixed` option progressively shrinks the prior standard deviation of selected Normal random effects from their initial value toward `anneal_min_sd` over the course of SAEM iterations. By the final iteration the prior SD is negligibly small, which effectively collapses the annealed RE into a fixed shift — the sampler can no longer move it away from its mean, so it behaves as a fixed effect without requiring a model change.
+The `anneal_to_fixed` option progressively shrinks the prior standard deviation of selected Normal random effects from their initial value toward `anneal_min_sd` over the course of SAEM iterations. By the final iteration the prior SD is negligibly small, which effectively collapses the annealed RE into a fixed shift - the sampler can no longer move it away from its mean, so it behaves as a fixed effect without requiring a model change.
 
 Both the E-step sampler and the M-step Q function see the shrunken SD at each iteration, so the annealing is consistent across the entire algorithm.
 
@@ -503,7 +503,7 @@ Annealing is useful when:
 A random effect is eligible for annealing if and only if:
 
 1. Its declared distribution is `Normal(μ, σ)`.
-2. The SD argument `σ` is a plain numeric literal — not a fixed-effect parameter, covariate, or helper expression.
+2. The SD argument `σ` is a plain numeric literal - not a fixed-effect parameter, covariate, or helper expression.
 
 Valid examples:
 ```julia
@@ -551,7 +551,7 @@ model = @Model begin
     end
 
     @randomEffects begin
-        # SD is a plain literal — eligible for annealing
+        # SD is a plain literal - eligible for annealing
         eta_id   = RandomEffect(Normal(0.0, 1.2); column=:ID)
         # This RE will be annealed: its SD decays from 0.8 to 1e-5
         eta_site = RandomEffect(Normal(0.0, 0.8); column=:SITE)

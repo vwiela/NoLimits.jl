@@ -88,7 +88,7 @@ lp = logprior(fe, theta_u)
 The behaviour of each scale option is summarized below:
 
 - **`:log` scale** applies an elementwise log transform and is supported for `RealNumber`, `RealVector`, and `RealDiagonalMatrix`. For inherently positive quantities such as standard deviations, `:log` enforces positivity in transformed space; an explicit `lower` bound is therefore optional.
-- **`:logit` scale** applies the logit transform (`log(x/(1-x))`, clamped to `[-20, 20]`) and is supported for `RealNumber` and `RealVector`. Use this for parameters that must lie in `(0, 1)`, such as probabilities. The inverse is the sigmoid function. The initial value must be strictly between 0 and 1; the constructor errors otherwise. Bounds are enforced implicitly via clamping — no explicit `lower`/`upper` are needed.
+- **`:logit` scale** applies the logit transform (`log(x/(1-x))`, clamped to `[-20, 20]`) and is supported for `RealNumber` and `RealVector`. Use this for parameters that must lie in `(0, 1)`, such as probabilities. The inverse is the sigmoid function. The initial value must be strictly between 0 and 1; the constructor errors otherwise. Bounds are enforced implicitly via clamping - no explicit `lower`/`upper` are needed.
 - **`:cholesky`** (for `RealPSDMatrix`) parameterizes the matrix via its Cholesky factor with log-transformed diagonal entries.
 - **`:expm`** (for `RealPSDMatrix`) parameterizes the matrix via matrix logarithm/exponential, storing only the upper-triangular elements.
 - **`:stickbreak`** (for `ProbabilityVector`) maps a k-probability simplex to k-1 unconstrained reals via the logistic stick-breaking transform. Each element νᵢ = pᵢ/(1-Σⱼ<ᵢ pⱼ) is passed through logit. The last probability is determined and not stored. Silently normalises the initial value if the sum is within 1e-6 of 1.
@@ -99,7 +99,7 @@ For `RealVector`, scales can be mixed per element by passing a `Vector{Symbol}`,
 
 ## Example: Learned Function Approximators
 
-Neural networks, soft decision trees, and B-splines can be declared as fixed effects and are automatically exposed as callable model functions. This enables flexible, data-driven components within an otherwise parametric model specification. `NNParameters` accepts either a Lux `Chain` or a SimpleChains `SimpleChain` — see [Function Approximators](universal-function-approximators.md) for the trade-offs (SimpleChains is faster and lower-allocation under ForwardDiff; Lux is required for `AutoEnzyme`).
+Neural networks, soft decision trees, and B-splines can be declared as fixed effects and are automatically exposed as callable model functions. This enables flexible, data-driven components within an otherwise parametric model specification. `NNParameters` accepts either a Lux `Chain` or a SimpleChains `SimpleChain` - see [Function Approximators](universal-function-approximators.md) for the trade-offs (SimpleChains is faster and lower-allocation under ForwardDiff; Lux is required for `AutoEnzyme`).
 
 ```julia
 using NoLimits
@@ -191,7 +191,7 @@ end
 
 Normalizing planar flows (`NPFParameter`) allow the random-effect distribution to depart from standard parametric families. The flow parameters are declared as fixed effects and referenced inside `@randomEffects` via `NormalizingPlanarFlow`. The corresponding model function is registered automatically.
 
-By default the flow uses a standard `MvNormal` base distribution. A custom base distribution can be passed via the `base_dist` keyword — any continuous multivariate distribution from Distributions.jl is supported (e.g. `MvTDist` for heavier tails, or a `MvNormal` with a non-zero mean or non-identity covariance).
+By default the flow uses a standard `MvNormal` base distribution. A custom base distribution can be passed via the `base_dist` keyword - any continuous multivariate distribution from Distributions.jl is supported (e.g. `MvTDist` for heavier tails, or a `MvNormal` with a non-zero mean or non-identity covariance).
 
 ```julia
 using NoLimits

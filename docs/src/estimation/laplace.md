@@ -175,9 +175,9 @@ This section explains the behaviour of the options whose effect is not obvious f
 - `theta_tol` is the cache tolerance for reusing objective/gradient values at nearby parameter vectors; `0.0` means reuse only for effectively identical vectors.
 - `lb`, `ub` are interpreted on transformed parameters and applied only to free fixed effects; bounds for parameters held constant via `constants` are ignored. `ignore_model_bounds=true` additionally disables the model-declared parameter bounds.
 - `nan_recovery` controls what happens when the outer fixed-effect gradient contains `NaN`. This can occur when a parameter is pushed to an extreme value during optimization (e.g., a log-scale parameter so large that the corresponding natural-scale value overflows), making certain Jacobian chain-rule products numerically undefined (`0 * Inf = NaN`).
-  - `:backtrack` (default) — treats a `NaN` gradient as a non-finite objective, forcing the line search to backtrack out of the offending region so optimization can continue.
-  - `:nan` — lets the `NaN` propagate to the optimizer as-is. BFGS will emit a warning and stop, which is an honest failure signal (as opposed to false convergence from a zero gradient); useful for debugging.
-  - `:fd` — falls back to a full central-difference gradient computed on the transformed scale. Each perturbed point re-runs the inner EB optimization, so this is more expensive but allows the optimizer to recover and continue past transient NaN regions.
+  - `:backtrack` (default) - treats a `NaN` gradient as a non-finite objective, forcing the line search to backtrack out of the offending region so optimization can continue.
+  - `:nan` - lets the `NaN` propagate to the optimizer as-is. BFGS will emit a warning and stop, which is an honest failure signal (as opposed to false convergence from a zero gradient); useful for debugging.
+  - `:fd` - falls back to a full central-difference gradient computed on the transformed scale. Each perturbed point re-runs the inner EB optimization, so this is more expensive but allows the optimizer to recover and continue past transient NaN regions.
 
   ```julia
   # Default: NaN gradient forces a backtracking step

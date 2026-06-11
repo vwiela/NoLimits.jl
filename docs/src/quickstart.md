@@ -1,7 +1,7 @@
 # Quickstart
 
 This page builds, fits, and inspects a complete nonlinear mixed-effects model in a few
-lines. It assumes the package is already installed — see [Installation](installation.md)
+lines. It assumes the package is already installed - see [Installation](installation.md)
 if not. The example is fully self-contained: copy it into a Julia session and run.
 
 ## 1. Define a model
@@ -68,7 +68,7 @@ mixed-effects models.
 res = fit_model(dm, NoLimits.Laplace())
 ```
 
-To try a different estimator, change only the method argument — the model and data are
+To try a different estimator, change only the method argument - the model and data are
 untouched. For example, `fit_model(dm, NoLimits.SAEM())` or, with priors on the fixed
 effects, `fit_model(dm, NoLimits.MCMC())`.
 
@@ -97,8 +97,8 @@ random-effects plots.
 
 ## Where to go next
 
-- [Model Building](model-building/index.md) — the full `@Model` specification language.
-- [Estimation](estimation/index.md) — every estimation method and the unified interface.
-- [Tutorials](tutorials/mixed-effects-multiple-methods.md) — end-to-end worked analyses,
+- [Model Building](model-building/index.md) - the full `@Model` specification language.
+- [Estimation](estimation/index.md) - every estimation method and the unified interface.
+- [Tutorials](tutorials/mixed-effects-multiple-methods.md) - end-to-end worked analyses,
   including ODE-based models, neural-network components, count outcomes, and censoring.
-- [NLME Methodology](nlme-methodology.md) — the mathematical framework behind the methods.
+- [NLME Methodology](nlme-methodology.md) - the mathematical framework behind the methods.

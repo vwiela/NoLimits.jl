@@ -41,7 +41,7 @@ Discrete distributions (`Poisson`, `Bernoulli`, etc.) are not supported and rais
 As a consequence:
 
 - When the data are highly informative and the posterior mode lies far from the prior mean, the nodes may miss the region of highest likelihood. In that case, the signed logsumexp can become numerically negative (especially at level ≥ 2), signalling poor quadrature accuracy.
-- The method works best when the posterior is roughly centered on the prior — for example, with moderate-information data, well-calibrated priors, or Gaussian random effects where the prior is a reasonable envelope for the posterior.
+- The method works best when the posterior is roughly centered on the prior - for example, with moderate-information data, well-calibrated priors, or Gaussian random effects where the prior is a reasonable envelope for the posterior.
 - Level 1 in the current (prior-centered) form is **not** equivalent to the Laplace approximation. That equivalence holds only for the adaptive (posterior-centered) variant, which is not yet implemented.
 
 An adaptive version (AGHQ), which re-centers nodes at the posterior mode per outer iteration, is planned and will address these limitations. For now, if you observe numerical instability at higher levels, consider using [`Laplace`](laplace.md) instead or staying at level 1.
@@ -51,7 +51,7 @@ An adaptive version (AGHQ), which re-centers nodes at the posterior mode per out
 `GHQuadrature` is a good choice when:
 
 - You have **no reliable starting values** and want a robust objective surface to explore. Because the objective is fully differentiable with respect to the fixed effects (no inner optimization during the forward pass), gradient-based optimizers can traverse the parameter space more freely than under Laplace.
-- You **know the posterior is close to the prior** — for instance, with weak data or well-specified priors — and want a more faithful marginal likelihood than Laplace at a controlled cost.
+- You **know the posterior is close to the prior** - for instance, with weak data or well-specified priors - and want a more faithful marginal likelihood than Laplace at a controlled cost.
 - You want to **cross-check Laplace results**. At the same optimum, a consistent GHQuadrature estimate (especially at level ≥ 2) provides evidence that the Laplace approximation is adequate.
 - You are fitting models with **non-Gaussian random effects** and want a quadrature-based alternative to Laplace without the approximation error of a Gaussian envelope.
 

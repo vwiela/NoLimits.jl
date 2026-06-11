@@ -13,7 +13,7 @@ Two splitting strategies are available via the `kind` keyword:
 
 | `kind` | Description |
 |--------|-------------|
-| `:id` | Whole individuals are assigned to folds. Test individuals are entirely absent from training — the unseen-individual prediction strategy applies to all of them. |
+| `:id` | Whole individuals are assigned to folds. Test individuals are entirely absent from training - the unseen-individual prediction strategy applies to all of them. |
 | `:observation` | Observations from each individual are distributed across folds using a floor/ceiling round-robin. Event rows (dosing, resets) are always included in both train and test, so the ODE can be integrated correctly on either subset. |
 
 `:id`-wise CV measures generalisation to new subjects; `:observation`-wise CV measures how well the model interpolates within a subject's time series given a subset of their observations.
@@ -22,19 +22,19 @@ Two splitting strategies are available via the `kind` keyword:
 
 For models with random effects, two separate modes control prediction for seen and unseen test individuals:
 
-**`seen_re_mode`** — individuals who appear in the training set:
+**`seen_re_mode`** - individuals who appear in the training set:
 
-- `:ebe` (default) — plug in the empirical Bayes estimate (EBE, MAP of the conditional posterior) obtained from the training fit. Fast and the standard approach in pharmacometrics.
-- `:conditional` — draw `n_mc_samples` samples from the training conditional posterior `p(b | y_train, θ̂)` using the Laplace approximation (for `Laplace`/`LaplaceMAP`) or MCMC sweeps (for `MCEM`/`SAEM`), then average per-observation log-likelihoods via `logsumexp` and predicted means arithmetically.
+- `:ebe` (default) - plug in the empirical Bayes estimate (EBE, MAP of the conditional posterior) obtained from the training fit. Fast and the standard approach in pharmacometrics.
+- `:conditional` - draw `n_mc_samples` samples from the training conditional posterior `p(b | y_train, θ̂)` using the Laplace approximation (for `Laplace`/`LaplaceMAP`) or MCMC sweeps (for `MCEM`/`SAEM`), then average per-observation log-likelihoods via `logsumexp` and predicted means arithmetically.
 
-**`unseen_re_mode`** — individuals absent from training (only possible with `kind=:id`):
+**`unseen_re_mode`** - individuals absent from training (only possible with `kind=:id`):
 
-- `:mean` (default) — set the random effect to the prior mean (zero for zero-mean priors). This is the marginal population prediction.
-- `:montecarlo` — draw `n_mc_samples` samples from the RE prior `p(b | θ̂)` and average in the same way as `:conditional`.
+- `:mean` (default) - set the random effect to the prior mean (zero for zero-mean priors). This is the marginal population prediction.
+- `:montecarlo` - draw `n_mc_samples` samples from the RE prior `p(b | θ̂)` and average in the same way as `:conditional`.
 
 ## Usage
 
-### Step 1 — Build the Split
+### Step 1 - Build the Split
 
 ```julia
 using NoLimits
@@ -43,7 +43,7 @@ using Random
 cv = cross_validate(dm, 5; kind=:observation, rng=MersenneTwister(1))
 ```
 
-### Step 2 — Fit and Evaluate
+### Step 2 - Fit and Evaluate
 
 ```julia
 res_cv = fit_cv(cv, NoLimits.Laplace())
@@ -63,7 +63,7 @@ res_cv = fit_cv(cv, NoLimits.Laplace();
 )
 ```
 
-### Step 3 — Inspect Results
+### Step 3 - Inspect Results
 
 ```julia
 # Aggregate statistics

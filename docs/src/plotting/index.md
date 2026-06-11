@@ -138,7 +138,7 @@ p_ms
 
 Comparing fitted trajectories from different estimation methods or model specifications is a natural step in model selection. `plot_fits_comparison` overlays trajectories from multiple fit results on the same individual panels, making differences in structural predictions immediately visible.
 
-For vectors, legend labels are assigned as `Model 1`, `Model 2`, and so on in input order. For `NamedTuple` and `Dict` inputs, the provided keys serve as legend labels. Per-model line styles can be customized through `PlotStyle(comparison_line_styles=Dict(...))`; `PlotStyle` is the shared styling object accepted by all plotting functions (colours, line styles, layout) — see its docstring in the API reference for the full set of fields. The `individuals_idx` keyword (here `1:2`) restricts the panels to the selected individuals.
+For vectors, legend labels are assigned as `Model 1`, `Model 2`, and so on in input order. For `NamedTuple` and `Dict` inputs, the provided keys serve as legend labels. Per-model line styles can be customized through `PlotStyle(comparison_line_styles=Dict(...))`; `PlotStyle` is the shared styling object accepted by all plotting functions (colours, line styles, layout) - see its docstring in the API reference for the full set of fields. The `individuals_idx` keyword (here `1:2`) restricts the panels to the selected individuals.
 
 ```@example plotting_overview
 saem_quick = NoLimits.SAEM(;

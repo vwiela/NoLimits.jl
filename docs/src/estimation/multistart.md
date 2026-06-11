@@ -51,19 +51,19 @@ ms = NoLimits.Multistart(;
 )
 ```
 
-- `screening` — Phase-1 screening criterion (see [Two-Phase Workflow](#two-phase-workflow)). `:prior_mean` (default) evaluates each candidate at η = 0; `:ebe` runs a short empirical-Bayes optimization (capped at `ebe_maxiters` iterations) before scoring.
-- `ebe_maxiters` — maximum inner EB iterations per candidate when `screening=:ebe`. Default `30`.
-- `progress` — enables or disables the progress bar. Default `true`.
+- `screening` - Phase-1 screening criterion (see [Two-Phase Workflow](#two-phase-workflow)). `:prior_mean` (default) evaluates each candidate at η = 0; `:ebe` runs a short empirical-Bayes optimization (capped at `ebe_maxiters` iterations) before scoring.
+- `ebe_maxiters` - maximum inner EB iterations per candidate when `screening=:ebe`. Default `30`.
+- `progress` - enables or disables the progress bar. Default `true`.
 
 ## Two-Phase Workflow
 
 `Multistart` uses a two-phase approach to avoid running full optimizations from all sampled candidates:
 
-**Phase 1 — Screening.** All `n_draws_requested` candidates are evaluated cheaply by computing the marginal log-likelihood at η = 0 (no random-effects perturbation) using a pre-compiled ODE and covariate cache. Candidates are ranked by this screening log-likelihood and the top `n_draws_used` are selected via a partial sort — no full optimization is performed during this phase.
+**Phase 1 - Screening.** All `n_draws_requested` candidates are evaluated cheaply by computing the marginal log-likelihood at η = 0 (no random-effects perturbation) using a pre-compiled ODE and covariate cache. Candidates are ranked by this screening log-likelihood and the top `n_draws_used` are selected via a partial sort - no full optimization is performed during this phase.
 
-**Phase 2 — Optimization.** The selected `n_draws_used` candidates are passed to the wrapped fitting method as independent starting points. Each run produces a full `FitResult`. The run with the best final objective is returned as the best result.
+**Phase 2 - Optimization.** The selected `n_draws_used` candidates are passed to the wrapped fitting method as independent starting points. Each run produces a full `FitResult`. The run with the best final objective is returned as the best result.
 
-If `n_draws_requested == n_draws_used`, Phase 1 is skipped entirely — no screening cache is built and all candidates proceed directly to optimization.
+If `n_draws_requested == n_draws_used`, Phase 1 is skipped entirely - no screening cache is built and all candidates proceed directly to optimization.
 
 ### Progress Logging
 
@@ -78,17 +78,17 @@ At the start of each `fit_model` call, a summary is logged:
 └   worst_screening_ll = -18.7
 ```
 
-- `candidates` — total starting points generated (= `n_draws_requested`, after any automatic adjustment).
-- `selected` — candidates forwarded to full optimization (= `n_draws_used`).
-- `varying` — names of parameters whose values differ across starts (those with a prior or an entry in `dists`).
-- `best_screening_ll` / `worst_screening_ll` — log-likelihood range of the selected candidates at η = 0. Omitted when screening is skipped (`candidates == selected`) or when all candidates produce non-finite likelihoods.
+- `candidates` - total starting points generated (= `n_draws_requested`, after any automatic adjustment).
+- `selected` - candidates forwarded to full optimization (= `n_draws_used`).
+- `varying` - names of parameters whose values differ across starts (those with a prior or an entry in `dists`).
+- `best_screening_ll` / `worst_screening_ll` - log-likelihood range of the selected candidates at η = 0. Omitted when screening is skipped (`candidates == selected`) or when all candidates produce non-finite likelihoods.
 
 ### Screening and Method Direction
 
 Screening always ranks candidates by the marginal log-likelihood (higher is better). This is the correct direction for every supported method:
 
-- **MLE / MAP / Laplace / MCEM / SAEM / VI** — all internally minimize the negative log-likelihood (or a penalized variant). Selecting candidates with the highest screening LL puts the optimizer in the most promising region.
-- **MCMC** — though MCMC does not optimize, starting from a high-likelihood region improves early mixing and reduces warm-up cost.
+- **MLE / MAP / Laplace / MCEM / SAEM / VI** - all internally minimize the negative log-likelihood (or a penalized variant). Selecting candidates with the highest screening LL puts the optimizer in the most promising region.
+- **MCMC** - though MCMC does not optimize, starting from a high-likelihood region improves early mixing and reduces warm-up cost.
 
 No sign adjustment is made per-method; the screening criterion is uniform.
 

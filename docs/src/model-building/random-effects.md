@@ -124,7 +124,7 @@ end
 
 For applications where standard parametric distributions are insufficiently flexible, NoLimits supports normalizing planar flows as random-effect distributions. A `NormalizingPlanarFlow(ψ)` transforms a base distribution through a sequence of invertible mappings, with parameters `ψ` registered as fixed effects via `NPFParameter`.
 
-By default the flow uses a standard `MvNormal(zeros(n_input), I)` base. Pass a custom base distribution via the `base_dist` keyword of `NPFParameter` to change this — for example `MvTDist` for heavier tails or a `MvNormal` with a non-zero mean or non-identity covariance.
+By default the flow uses a standard `MvNormal(zeros(n_input), I)` base. Pass a custom base distribution via the `base_dist` keyword of `NPFParameter` to change this - for example `MvTDist` for heavier tails or a `MvNormal` with a non-zero mean or non-identity covariance.
 
 ```julia
 using NoLimits

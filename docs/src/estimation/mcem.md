@@ -24,10 +24,10 @@ NoLimits.MCEM_MCMC(;
 )
 ```
 
-- `sampler` — Turing sampler. Common choices: `MH()`, `NUTS(...)`.
-- `turing_kwargs` — forwarded to Turing; the keys `n_samples` and `n_adapt` are interpreted explicitly.
-- `sample_schedule` — number of MCMC samples per iteration; accepts an integer, a vector (iteration-indexed), or a function `iter -> n_samples`.
-- `warm_start` — when `true`, reuses previous latent-state values as chain initialization.
+- `sampler` - Turing sampler. Common choices: `MH()`, `NUTS(...)`.
+- `turing_kwargs` - forwarded to Turing; the keys `n_samples` and `n_adapt` are interpreted explicitly.
+- `sample_schedule` - number of MCMC samples per iteration; accepts an integer, a vector (iteration-indexed), or a function `iter -> n_samples`.
+- `warm_start` - when `true`, reuses previous latent-state values as chain initialization.
 
 ### Importance Sampling E-step (`MCEM_IS`)
 
@@ -45,11 +45,11 @@ NoLimits.MCEM_IS(;
 )
 ```
 
-- `n_samples` — number of IS draws per E-step iteration.
-- `proposal` — proposal distribution (see [Proposal Modes](@ref) below).
-- `adapt` — when `true`, updates the Gaussian proposal blocks after each IS iteration using IS-weighted statistics of the current samples.
-- `warm_start_mcmc_iters` — number of initial iterations to run with the MCMC E-step before switching to IS. Use this to pre-warm the Gaussian proposal.
-- `mcmc_warmup` — an `MCEM_MCMC` configuration used during the warm-up phase (required when `warm_start_mcmc_iters > 0`).
+- `n_samples` - number of IS draws per E-step iteration.
+- `proposal` - proposal distribution (see [Proposal Modes](@ref) below).
+- `adapt` - when `true`, updates the Gaussian proposal blocks after each IS iteration using IS-weighted statistics of the current samples.
+- `warm_start_mcmc_iters` - number of initial iterations to run with the MCMC E-step before switching to IS. Use this to pre-warm the Gaussian proposal.
+- `mcmc_warmup` - an `MCEM_MCMC` configuration used during the warm-up phase (required when `warm_start_mcmc_iters > 0`).
 
 #### Proposal Modes
 
@@ -94,8 +94,8 @@ es = NoLimits.MCEM_IS(n_samples=100, proposal=my_proposal)
 ```
 
 The function must return:
-- `samples` — matrix of shape `(n_b, n_samples)` where `n_b` is the total dimension of all RE levels in the batch.
-- `log_qs` — vector of length `n_samples` containing `log q(bₘ)` for each draw.
+- `samples` - matrix of shape `(n_b, n_samples)` where `n_b` is the total dimension of all RE levels in the batch.
+- `log_qs` - vector of length `n_samples` containing `log q(bₘ)` for each draw.
 
 ## Applicability
 
@@ -256,8 +256,8 @@ The `notes` field of the fit result contains iteration-level diagnostics:
 
 ```julia
 diag = get_notes(res).diagnostics
-diag.Q_hist    # Vector{Float64} — Q-function value per iteration
-diag.ess_hist  # Vector{Float64} — effective sample size per iteration
+diag.Q_hist    # Vector{Float64} - Q-function value per iteration
+diag.ess_hist  # Vector{Float64} - effective sample size per iteration
                #   IS iterations: ESS = 1/Σwₘ² ∈ [1, n_samples]
                #   MCMC iterations: NaN
 ```
@@ -275,7 +275,7 @@ plot(diag.ess_hist, label="ESS", xlabel="iteration")
 The legacy MCMC-only keyword interface is fully preserved. Existing code that does not use `e_step` continues to work:
 
 ```julia
-# Old API — still works
+# Old API - still works
 method = NoLimits.MCEM(
     sampler       = MH(),
     turing_kwargs = (n_samples=50, n_adapt=0, progress=false),

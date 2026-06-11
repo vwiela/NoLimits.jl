@@ -5,7 +5,7 @@ layout: home
 hero:
   name: "NoLimits.jl"
   text: "Nonlinear mixed-effects modeling without compromise"
-  tagline: Mechanistic ODEs, hidden Markov models, neural-network and soft-tree components, and frequentist, Bayesian, and variational estimation — composed in one framework, fit through one interface.
+  tagline: Mechanistic ODEs, hidden Markov models, neural-network and soft-tree components, and frequentist, Bayesian, and variational estimation - composed in one framework, fit through one interface.
   image:
     src: /logo.png
     alt: NoLimits.jl
@@ -24,7 +24,7 @@ features:
   - title: Diverse structural models
     details: Classical nonlinear functions, mechanistic ODE systems, and hidden Markov outcome models combine within a single specification.
   - title: Flexible estimation
-    details: Fit one model with Laplace, FOCEI, MCEM, SAEM, full Bayesian MCMC, or variational inference — and compare paradigms without rewriting it.
+    details: Fit one model with Laplace, FOCEI, MCEM, SAEM, full Bayesian MCMC, or variational inference - and compare paradigms without rewriting it.
   - title: Machine-learning integration
     details: Embed neural networks (including neural-ODE constructions) and soft decision trees alongside known mechanistic terms.
   - title: Rich hierarchical variability
@@ -34,8 +34,8 @@ features:
 
 ## Why NoLimits.jl?
 
-Longitudinal studies — where repeated measurements are collected from multiple individuals
-over time — are ubiquitous in the biomedical and natural sciences. Analyzing such data
+Longitudinal studies - where repeated measurements are collected from multiple individuals
+over time - are ubiquitous in the biomedical and natural sciences. Analyzing such data
 requires models that capture both the underlying process dynamics and the variability across
 individuals. Nonlinear mixed-effects models provide a principled statistical framework for
 this, but existing software often forces users to choose between model expressiveness,
@@ -48,8 +48,8 @@ NoLimits.jl removes these trade-offs. It supports:
 - **Flexible estimation.** The same model can be fitted using frequentist methods (Laplace
   approximation, FOCEI, MCEM, SAEM, Gauss–Hermite quadrature), full Bayesian MCMC sampling,
   or variational inference, enabling comparison across inferential paradigms.
-- **Machine-learning integration.** Neural-network components — including neural-ODE
-  constructions — and soft decision trees can be embedded alongside known mechanistic terms,
+- **Machine-learning integration.** Neural-network components - including neural-ODE
+  constructions - and soft decision trees can be embedded alongside known mechanistic terms,
   so models retain established scientific structure while learning unknown nonlinear behavior
   from data.
 - **Rich hierarchical variability.** Random-effect distributions are not restricted to

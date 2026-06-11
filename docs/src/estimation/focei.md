@@ -32,9 +32,9 @@ This has two consequences:
 The `interaction` flag controls whether the dependence of dispersion-type parameters
 (e.g. a residual-error standard deviation) on the random effects is retained:
 
-- `interaction=true` (default) — full FOCEI; the interaction between random effects and
+- `interaction=true` (default) - full FOCEI; the interaction between random effects and
   the residual model is kept.
-- `interaction=false` — FOCE; dispersion-type parameters are frozen at the random-effects
+- `interaction=false` - FOCE; dispersion-type parameters are frozen at the random-effects
   prior mean and their dependence on the random effects is ignored.
 
 ## Supported Outcome Families
@@ -48,7 +48,7 @@ The supported families are:
 !!! warning "Unsupported outcome models"
     Hidden Markov / Markov outcome models and any distribution without a registered Fisher
     information are **not** supported by FOCEI. Use the [Laplace](laplace.md) approximation
-    for those models — it makes no closed-form-information assumption.
+    for those models - it makes no closed-form-information assumption.
 
 ## Applicability
 
@@ -109,7 +109,7 @@ res_foce = fit_model(dm, NoLimits.FOCEI(; interaction=false))
 
 ## Constructor Options
 
-All keyword arguments of `FOCEI` **mirror those of [`Laplace`](laplace.md)** — the outer
+All keyword arguments of `FOCEI` **mirror those of [`Laplace`](laplace.md)** - the outer
 fixed-effects optimizer, the inner EB optimization, the EB multistart policy, the Hessian
 jitter controls, caching, and bounds all behave identically. The only addition is
 `interaction::Bool=true`. See the [Laplace](laplace.md) page for the full description of

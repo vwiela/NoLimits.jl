@@ -5,7 +5,7 @@
 <h1 align="center">NoLimits.jl</h1>
 
 <p align="center">
-  <em>Nonlinear mixed-effects modeling without compromise — mechanistic ODEs, hidden Markov models,<br/>
+  <em>Nonlinear mixed-effects modeling without compromise: mechanistic ODEs, hidden Markov models,<br/>
   neural-network and soft-tree components, and frequentist, Bayesian, and variational estimation,<br/>
   composed in one framework and fit through one interface.</em>
 </p>
@@ -32,8 +32,8 @@
 </p>
 
 NoLimits.jl is a unified, open-source framework for specifying, estimating, and diagnosing
-hierarchical models of longitudinal data. It targets life-science applications — from
-pharmacometrics and systems biology to ecology, psychometrics, and medical imaging — where
+hierarchical models of longitudinal data. It targets life-science applications, from
+pharmacometrics and systems biology to ecology, psychometrics, and medical imaging, where
 population variability, mechanistic dynamics, and complex outcome structures must be modeled
 jointly.
 
@@ -54,7 +54,7 @@ the user.
 
 NoLimits.jl removes these trade-offs through a single, composable modeling language in which
 mechanistic structure, learned components, flexible random-effect distributions, and diverse
-outcome types coexist in one coherent specification — and can be estimated with multiple
+outcome types coexist in one coherent specification, and can be estimated with multiple
 inference paradigms without rewriting the model.
 
 > To the best of our knowledge, no other open-source framework combines mechanistic ODE **and**
@@ -69,12 +69,12 @@ inference paradigms without rewriting the model.
 | Component | Capabilities |
 |---|---|
 | **Structural model** | Algebraic functions, ODE systems (via OrdinaryDiffEq.jl), derived signals |
-| **Machine-learning blocks** | Neural networks (Lux.jl), soft decision trees, B-splines — embeddable in formulas, ODE right-hand sides, initial conditions, or RE distributions |
+| **Machine-learning blocks** | Neural networks (Lux.jl), soft decision trees, B-splines (embeddable in formulas, ODE right-hand sides, initial conditions, or RE distributions) |
 | **Random effects** | Univariate and multivariate; multiple grouping structures simultaneously (e.g., subject + site) |
-| **RE distributions** | Gaussian, non-Gaussian (heavy-tailed, skewed, positive-valued), normalizing planar flows — optionally parameterized by covariates and learned functions |
+| **RE distributions** | Gaussian, non-Gaussian (heavy-tailed, skewed, positive-valued), normalizing planar flows (optionally parameterized by covariates and learned functions) |
 | **Outcome model** | Normal, LogNormal, Poisson, Bernoulli, NegativeBinomial, and arbitrary `Distributions.jl` families; hidden Markov models with random effects |
 | **Covariates** | Time-varying, group-constant, and interpolated dynamic covariates (8 interpolation types) |
-| **Missing data** | Likelihood-based handling of missing observations and covariates under parametric assumptions — no ad hoc imputation |
+| **Missing data** | Likelihood-based handling of missing observations and covariates under parametric assumptions (no ad hoc imputation) |
 | **Censoring** | Left-censored and interval-censored observations |
 
 All components are freely composable: a single model can simultaneously use ODE dynamics,
@@ -196,14 +196,14 @@ plot_vpc(res; n_simulations=200)
 plot_residuals(res)
 ```
 
-Swapping the inference paradigm is a one-line change — `fit_model(dm, SAEM())`, `fit_model(dm, MCEM())`,
-or `fit_model(dm, MCMC())` all fit the *same* model. More examples — neural-ODE models, HMM
+Swapping the inference paradigm is a one-line change: `fit_model(dm, SAEM())`, `fit_model(dm, MCEM())`,
+or `fit_model(dm, MCMC())` all fit the *same* model. More examples (neural-ODE models, HMM
 outcomes, normalizing-flow random effects, count outcomes, censored data, and multi-method
-comparison — are in the [Tutorials](https://manuhuth.github.io/NoLimits.jl/dev/tutorials/mixed-effects-multiple-methods).
+comparison) are in the [Tutorials](https://manuhuth.github.io/NoLimits.jl/dev/tutorials/mixed-effects-multiple-methods).
 
 ## Built on the Julia ecosystem
 
-NoLimits.jl integrates directly with established Julia packages — users familiar with any of
+NoLimits.jl integrates directly with established Julia packages. Users familiar with any of
 them will find the interfaces immediately recognizable.
 
 | Domain | Package | Role in NoLimits.jl |
@@ -236,8 +236,8 @@ Full documentation is hosted at **[manuhuth.github.io/NoLimits.jl](https://manuh
 
 ## Getting help & contributing
 
-- **Questions and ideas** — open a [GitHub Discussion](https://github.com/manuhuth/NoLimits.jl/discussions).
-- **Bugs and feature requests** — open an [issue](https://github.com/manuhuth/NoLimits.jl/issues);
+- **Questions and ideas**: open a [GitHub Discussion](https://github.com/manuhuth/NoLimits.jl/discussions).
+- **Bugs and feature requests**: open an [issue](https://github.com/manuhuth/NoLimits.jl/issues);
   a minimal reproducible example helps enormously.
 - **Contributions** are welcome. See the
   [How to Contribute](https://manuhuth.github.io/NoLimits.jl/dev/how-to-contribute) and

@@ -73,7 +73,7 @@ y_{ij} \sim p_y\!\left(\cdot \mid f_i(t_{ij}; \theta, \eta_i, x_{ij}, z_i), \the
 ```
 
 The observation distribution $p_y$ can be any distribution from the `Distributions.jl`
-ecosystem [besancon2021distributions](@cite) — continuous (e.g., Normal, LogNormal),
+ecosystem [besancon2021distributions](@cite) - continuous (e.g., Normal, LogNormal),
 discrete (e.g., Poisson, Bernoulli), censored, or structured (e.g., hidden Markov models;
 see below).
 
@@ -272,9 +272,9 @@ with forward filtering applied during likelihood evaluation and diagnostics.
 
 Covariates can enter at three levels:
 
-- **Structural dynamics** — modifying the deterministic model or ODE right-hand side.
-- **Observation model** — affecting distribution parameters directly.
-- **Random-effect distributions** — modulating the location, scale, or shape of
+- **Structural dynamics** - modifying the deterministic model or ODE right-hand side.
+- **Observation model** - affecting distribution parameters directly.
+- **Random-effect distributions** - modulating the location, scale, or shape of
   between-individual variability.
 
 This flexibility enables both mean-structure and variability-structure covariate effects
