@@ -201,61 +201,6 @@ or `fit_model(dm, MCMC())` all fit the *same* model. More examples — neural-OD
 outcomes, normalizing-flow random effects, count outcomes, censored data, and multi-method
 comparison — are in the [Tutorials](https://manuhuth.github.io/NoLimits.jl/dev/tutorials/mixed-effects-multiple-methods).
 
-## How NoLimits.jl compares
-
-The NLME landscape includes mature commercial tools — NONMEM, Monolix, and Pumas — which we do
-not benchmark here, and general-purpose probabilistic programming languages (Stan, Turing.jl,
-PyMC). NoLimits.jl *uses* Turing.jl as its Bayesian backend rather than competing with it, so a
-head-to-head against general PPLs is not meaningful. The directly comparable **open-source NLME
-packages** are the R packages [nlmixr2](https://nlmixr2.org/) and
-[saemix](https://github.com/saemixdevelopment/saemixextension); the table below compares against
-them.
-
-| Capability | NoLimits.jl | nlmixr2 | saemix |
-|---|:---:|:---:|:---:|
-| ODE / mechanistic structural models | ✓ | ✓ | (✓) |
-| Algebraic / closed-form models | ✓ | ✓ | ✓ |
-| Hidden Markov & latent-state outcomes | ✓ | — | — |
-| Censored & time-to-event data | ✓ | ✓ | ✓ |
-| Gaussian random effects | ✓ | ✓ | ✓ |
-| Skewed random effects (e.g. log-normal) | ✓ | ✓ | ✓ |
-| Symmetric heavy-tailed REs (Student-*t*, Laplace) | ✓ | — | — |
-| Normalizing-flow random effects | ✓ | — | — |
-| Multiple / crossed grouping levels | ✓ | ✓ | (✓) |
-| Non-Gaussian outcomes (count, binary, categorical) | ✓ | ✓ | ✓ |
-| Embedded neural-network components | ✓ | (✓) | — |
-| Arbitrary NN architectures (multi-layer, any activation) | ✓ | — | — |
-| Likelihood / EM-type estimation | ✓ | ✓ | ✓ |
-| Bayesian inference (MCMC, MAP) | ✓ | — | — |
-| One interface across all estimators | ✓ | (✓) | — |
-| Bootstrap uncertainty | — | ✓ | ✓ |
-| Automated covariate search | — | ✓ | — |
-| NONMEM / Monolix model import | — | ✓ | — |
-| Mature, extensively validated ecosystem | emerging | ✓ | ✓ |
-| Language / platform | Julia | R | R |
-
-<sub>✓ native support · (✓) conditional or via an extension package · — not available.
-Likelihood/EM methods: NoLimits.jl (Laplace, Gauss–Hermite quadrature, SAEM, MCEM, MLE),
-nlmixr2 (FOCEI, SAEM, adaptive Gaussian quadrature), saemix (SAEM). Neural-network support in
-nlmixr2 is provided by the third-party
-`pmxNODE` extension (single hidden layer; ReLU/Softplus activations only).
-"One interface across all estimators": nlmixr2 unifies its likelihood/EM methods but offers no
-Bayesian MCMC or MAP. saemix supports ODEs through external solving and crossed grouping levels
-conditionally. Comparison reflects nlmixr2 and saemix as of 2026.</sub>
-
-**Where the alternatives win.** nlmixr2 and saemix are excellent, widely used R packages with
-mature, extensively validated estimation workflows, large pharmacometrics communities, and
-features NoLimits.jl does not yet offer — bootstrap uncertainty, automated covariate search, and
-NONMEM/Monolix model import (nlmixr2). For workflows that benefit most from a long track record
-and an established ecosystem, they remain a natural choice.
-
-**When to reach for NoLimits.jl.** Choose it for hidden-Markov / latent-state outcomes,
-symmetric heavy-tailed or normalizing-flow random effects, native and architecturally
-unrestricted neural-network components, or when a *single* model must be fit across both
-likelihood/EM and full Bayesian inference. For a fully bespoke Bayesian model outside the NLME
-workflow, the underlying [Turing.jl](https://github.com/TuringLang/Turing.jl) backend remains
-directly accessible.
-
 ## Built on the Julia ecosystem
 
 NoLimits.jl integrates directly with established Julia packages — users familiar with any of
