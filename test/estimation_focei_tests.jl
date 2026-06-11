@@ -300,3 +300,52 @@ end
         serialization = NL.EnsembleSerial())
     @test isfinite(NL.get_objective(res))
 end
+
+@testset "MvNormal expected information: closed form ≡ vech-basis reference" begin
+    # `_focei_expected_information(::MvNormal)` computes the covariance block in
+    # closed form; `_focei_vech_basis` is retained as the reference definition of
+    # the vech convention. Pin their equivalence (and the zero cross blocks).
+    for k in (1, 2, 3, 4), seed in 1:2
+        A = randn(Xoshiro(10k + seed), k, k)
+        d = MvNormal(randn(Xoshiro(seed), k), Symmetric(A * A' + k * I))
+        F = NL._focei_expected_information(d)
+        Σ = Matrix(cov(d))
+        P = inv(Σ)
+        nv = k * (k + 1) ÷ 2
+        bases = NL._focei_vech_basis(k)
+        Fcov_ref = [0.5 * tr(P * bases[a] * P * bases[b]) for a in 1:nv, b in 1:nv]
+        @test size(F) == (k + nv, k + nv)
+        @test isapprox(F[1:k, 1:k], P; rtol = 1e-12)
+        @test isapprox(F[(k + 1):end, (k + 1):end], Fcov_ref; rtol = 1e-12, atol = 1e-12)
+        @test all(iszero, F[1:k, (k + 1):end])
+        @test all(iszero, F[(k + 1):end, 1:k])
+    end
+end
+
+@testset "_focei_obs_dists_batch returns a concretely-typed vector" begin
+    model = @Model begin
+        @fixedEffects begin
+            a = RealNumber(0.2)
+            σ = RealNumber(0.4, scale = :log)
+        end
+        @covariates begin
+            t = Covariate()
+        end
+        @randomEffects begin
+            η = RandomEffect(Normal(0.0, 1.0); column = :ID)
+        end
+        @formulas begin
+            y ~ Normal(a + η, σ)
+        end
+    end
+    df = DataFrame(ID = repeat(1:4, inner = 3), t = repeat(0:2, 4),
+        y = randn(Xoshiro(3), 12) .* 0.3 .+ 0.2)
+    dm = DataModel(model, df; primary_id = :ID, time_col = :t)
+    _, batch_infos, const_cache = NL._build_laplace_batch_infos(dm, NamedTuple())
+    ll_cache = NL.build_ll_cache(dm)
+    θu = NL.get_θ0_untransformed(dm.model.fixed.fixed)
+    info = batch_infos[1]
+    dists = NL._focei_obs_dists_batch(dm, info, θu, zeros(info.n_b), const_cache, ll_cache)
+    @test isconcretetype(eltype(dists))
+    @test eltype(dists) <: Normal
+end

@@ -70,6 +70,22 @@ transform(re::GaussianRE, z::AbstractVector) = re.μ + re.L * z
 logcorrection(::GaussianRE, z::AbstractVector) = zero(eltype(z))
 Base.eltype(::GaussianRE{T}) where {T} = T
 
+# In-place transform for hot per-node loops (one fresh vector per quadrature node
+# otherwise). `mul!` for a triangular matrix is `lmul!(L, copyto!(out, z))` — the same
+# kernel `re.L * z` runs on its internal copy — and elementwise `+` is commutative, so
+# the result is bit-identical to `transform`. The generic fallback ignores the buffer.
+function transform!(out::AbstractVector, re::GaussianRE, z::AbstractVector)
+    mul!(out, re.L, z)
+    out .+= re.μ
+    return out
+end
+transform!(out::AbstractVector, re::AbstractREMeasure, z::AbstractVector) = transform(
+    re, z)
+
+# Buffer length needed by `transform!` (0 = fallback path, buffer unused).
+_transform_buffer_len(re::GaussianRE) = re.n_b
+_transform_buffer_len(::AbstractREMeasure) = 0
+
 # ---------------------------------------------------------------------------
 # Build GaussianRE from a batch at current θ
 # ---------------------------------------------------------------------------

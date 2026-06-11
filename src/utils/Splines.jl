@@ -18,27 +18,65 @@ lie within `[knots[1], knots[end]]`.
 - `degree::Integer`: polynomial degree of the spline (e.g. `2` for quadratic, `3` for cubic).
 """
 function bspline_basis(x::Real, knots::AbstractVector{<:Real}, degree::Integer)
+    n = _bspline_validate(x, knots, degree)
+    vals, mu = _bspline_nonzero(x, knots, Int(degree))
+    out = zeros(eltype(vals), n)
+    @inbounds for r in 1:(Int(degree) + 1)
+        i = mu - Int(degree) + r - 1
+        1 <= i <= n && (out[i] = vals[r])
+    end
+    return out
+end
+
+@inline function _bspline_validate(x::Real, knots::AbstractVector{<:Real}, degree::Integer)
     degree >= 0 || error("degree must be non-negative")
     issorted(knots) || error("knots must be sorted non-decreasing")
     n = length(knots) - degree - 1
     n > 0 || error("Invalid knots/degree: expected length(knots) > degree+1")
     (x < knots[1] || x > knots[end]) &&
         error("x out of knot range: expected $(knots[1]) ≤ x ≤ $(knots[end]); got $(x).")
-    return [_bspline_basis_one(i, degree, x, knots) for i in 1:n]
+    return n
 end
 
-function _bspline_basis_one(i::Int, k::Int, x::Real, knots::AbstractVector{<:Real})
-    if k == 0
-        return ((knots[i] <= x && x < knots[i + 1]) ||
-                (x == knots[end] && i == length(knots) - 1)) ? one(x) : zero(x)
+# Iterative Cox–de Boor triangle over the knot span containing `x`.
+#
+# Returns `(vals, mu)` where `vals[r] = N_{mu-degree+r-1, degree}(x)` — the only
+# (≤ degree+1) basis functions that can be nonzero at `x` — and `mu` is the unique
+# level-0 index with `knots[mu] ≤ x < knots[mu+1]` (right-closed at `knots[end]`,
+# matching the historical recursion's indicator convention).
+#
+# The previous implementation evaluated every basis function independently via the
+# top-down recursion — `O(n · 2^degree)` redundant work. The triangle shares the
+# sub-values and is `O(degree²)`. Each `N_{i,k}` is computed by the same recurrence
+# expression (same zero-denominator guards, same operation order) on the same
+# sub-values, so results are bit-identical to the recursion. Pure scalar arithmetic:
+# ForwardDiff/Enzyme compatible.
+function _bspline_nonzero(x::Real, knots::AbstractVector{<:Real}, degree::Int)
+    m = length(knots)
+    mu = x == knots[end] ? m - 1 : searchsortedlast(knots, x)
+    T = float(promote_type(typeof(x), eltype(knots)))
+    prev = zeros(T, degree + 1)   # level k-1: prev[r] = N_{mu-(k-1)+r-1, k-1}
+    cur = zeros(T, degree + 1)    # level k:   cur[r]  = N_{mu-k+r-1, k}
+    prev[1] = one(T)              # level 0:   N_{mu,0} = 1
+    @inbounds for k in 1:degree
+        for r in 1:(k + 1)
+            i = mu - k + r - 1
+            if !(1 <= i && i + k + 1 <= m)
+                cur[r] = zero(T)   # basis function does not exist at this index
+                continue
+            end
+            denom1 = knots[i + k] - knots[i]
+            denom2 = knots[i + k + 1] - knots[i + 1]
+            # N_{i,k-1} sits at prev[r-1]; N_{i+1,k-1} at prev[r] (window shifts by 1)
+            Nikm1 = (1 <= r - 1 <= k) ? prev[r - 1] : zero(T)
+            Ni1km1 = (r <= k) ? prev[r] : zero(T)
+            term1 = denom1 == 0 ? zero(T) : (x - knots[i]) / denom1 * Nikm1
+            term2 = denom2 == 0 ? zero(T) : (knots[i + k + 1] - x) / denom2 * Ni1km1
+            cur[r] = term1 + term2
+        end
+        prev, cur = cur, prev
     end
-    denom1 = knots[i + k] - knots[i]
-    denom2 = knots[i + k + 1] - knots[i + 1]
-    term1 = denom1 == 0 ? zero(x) :
-            (x - knots[i]) / denom1 * _bspline_basis_one(i, k - 1, x, knots)
-    term2 = denom2 == 0 ? zero(x) :
-            (knots[i + k + 1] - x) / denom2 * _bspline_basis_one(i + 1, k - 1, x, knots)
-    return term1 + term2
+    return prev, mu
 end
 
 """
@@ -62,10 +100,18 @@ length-1 vector it is treated as a scalar.
 """
 function bspline_eval(x::Real, coeffs::AbstractVector{<:Real},
         knots::AbstractVector{<:Real}, degree::Integer)
-    basis = bspline_basis(x, knots, degree)
-    length(coeffs) == length(basis) ||
-        error("Coefficient length mismatch: expected $(length(basis)); got $(length(coeffs)).")
-    return dot(basis, coeffs)
+    n = _bspline_validate(x, knots, degree)
+    length(coeffs) == n ||
+        error("Coefficient length mismatch: expected $(n); got $(length(coeffs)).")
+    # Sum only over the ≤ degree+1 basis functions that are nonzero at `x` — no
+    # length-n basis vector is materialised.
+    vals, mu = _bspline_nonzero(x, knots, Int(degree))
+    s = zero(promote_type(eltype(vals), eltype(coeffs)))
+    @inbounds for r in 1:(Int(degree) + 1)
+        i = mu - Int(degree) + r - 1
+        1 <= i <= n && (s += vals[r] * coeffs[i])
+    end
+    return s
 end
 
 function bspline_eval(x::AbstractVector{<:Real}, coeffs::AbstractVector{<:Real},

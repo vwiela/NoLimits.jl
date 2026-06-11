@@ -406,11 +406,14 @@ at setup time before parallel use.
 """
 function get_anisotropic_grid(dims::Vector{Int}, levels::Vector{Int})
     @assert length(dims) == length(levels) >= 1
-    key = (copy(dims), copy(levels))
-    haskey(_ANISOTROPIC_CACHE, key) && return _ANISOTROPIC_CACHE[key]
+    # Lookup with the caller's vectors (hashing does not retain the key); defensive
+    # copies are only needed when INSERTING, so the cached-lookup fast path — taken
+    # once per batch per objective evaluation — is allocation-free.
+    g = get(_ANISOTROPIC_CACHE, (dims, levels), nothing)
+    g === nothing || return g
     grids = [get_sparse_grid(d, l) for (d, l) in zip(dims, levels)]
     sg = build_tensor_product_grid(grids)
-    _ANISOTROPIC_CACHE[key] = sg
+    _ANISOTROPIC_CACHE[(copy(dims), copy(levels))] = sg
     return sg
 end
 

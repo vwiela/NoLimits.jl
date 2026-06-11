@@ -51,13 +51,143 @@ end
 InverseTransform(names, specs) = InverseTransform(names, specs, nothing, -1)
 
 function (ft::ForwardTransform)(θ::ComponentArray)
-    vals = _transform_vals(θ, ft.names, ft.specs)
-    return _assemble_ca(vals, ft.names, ft.out_axes, ft.n_out, eltype(θ))
+    if ft.out_axes === nothing
+        vals = _transform_vals(θ, ft.names, ft.specs)
+        return _assemble_ca(vals, ft.names, ft.out_axes, ft.n_out, eltype(θ))
+    end
+    # Axes path: write each parameter's transformed values straight into the flat
+    # output buffer. The legacy route collected per-parameter results in a boxed
+    # `Vector{Any}` (the `map` closure's branches return heterogeneous types) and
+    # then re-walked it — measurably hot, since the inverse runs inside the ODE RHS
+    # and both run once per objective evaluation.
+    flat = Vector{eltype(θ)}(undef, ft.n_out)
+    k = 1
+    @inbounds for i in eachindex(ft.names)
+        k = _write_forward_spec!(flat, k, ft.specs[i], getproperty(θ, ft.names[i]))
+    end
+    k == ft.n_out + 1 ||
+        error("Transform output length mismatch: expected $(ft.n_out), got $(k - 1).")
+    return ComponentArray(flat, ft.out_axes)
 end
 
 function (it::InverseTransform)(θ::ComponentArray)
-    vals = _inverse_vals(θ, it.names, it.specs)
-    return _assemble_ca(vals, it.names, it.out_axes, it.n_out, eltype(θ))
+    if it.out_axes === nothing
+        vals = _inverse_vals(θ, it.names, it.specs)
+        return _assemble_ca(vals, it.names, it.out_axes, it.n_out, eltype(θ))
+    end
+    flat = Vector{eltype(θ)}(undef, it.n_out)
+    k = 1
+    @inbounds for i in eachindex(it.names)
+        k = _write_inverse_spec!(flat, k, it.specs[i], getproperty(θ, it.names[i]))
+    end
+    k == it.n_out + 1 ||
+        error("Transform output length mismatch: expected $(it.n_out), got $(k - 1).")
+    return ComponentArray(flat, it.out_axes)
+end
+
+# Direct flat-buffer writers for the axes path. Branch-for-branch identical math to
+# `_transform_vals` / `_inverse_vals` (which remain as the legacy no-axes route):
+# scalar kinds write elementwise with no temporaries; matrix/simplex kinds reuse the
+# shared helpers and copy their (small) results in the same element order
+# (`for x in M` is column-major, matching the legacy `vec`-based writes).
+function _write_forward_spec!(flat::Vector, k::Int, spec::TransformSpec, val)
+    kind = spec.kind
+    if kind === :log
+        if val isa Number
+            flat[k] = log(val)
+            return k + 1
+        end
+        for x in val
+            flat[k] = log(x)
+            k += 1
+        end
+        return k
+    elseif kind === :logit
+        if val isa Number
+            flat[k] = logit_forward(val)
+            return k + 1
+        end
+        for x in val
+            flat[k] = logit_forward(x)
+            k += 1
+        end
+        return k
+    elseif kind === :elementwise
+        for j in eachindex(val)
+            flat[k] = _scalar_forward(spec.mask[j], val[j])
+            k += 1
+        end
+        return k
+    elseif kind === :cholesky
+        return _write_flat!(flat, cholesky_forward(val), k)
+    elseif kind === :expm
+        M = expm_forward(val)
+        n = size(M, 1)
+        for j in 1:n, i in 1:j
+            flat[k] = M[i, j]
+            k += 1
+        end
+        return k
+    elseif kind === :stickbreak
+        return _write_flat!(flat, stickbreak_forward(val), k)
+    elseif kind === :stickbreakrows
+        n = size(val, 1)
+        for i in 1:n
+            k = _write_flat!(flat, stickbreak_forward(view(val, i, :)), k)
+        end
+        return k
+    elseif kind === :lograterows
+        return _write_flat!(flat, lograterows_forward(val), k)
+    else
+        return _write_flat!(flat, val, k)
+    end
+end
+
+function _write_inverse_spec!(flat::Vector, k::Int, spec::TransformSpec, val)
+    kind = spec.kind
+    if kind === :log
+        if val isa Number
+            flat[k] = exp(val)
+            return k + 1
+        end
+        for x in val
+            flat[k] = exp(x)
+            k += 1
+        end
+        return k
+    elseif kind === :logit
+        if val isa Number
+            flat[k] = logit_inverse(val)
+            return k + 1
+        end
+        for x in val
+            flat[k] = logit_inverse(x)
+            k += 1
+        end
+        return k
+    elseif kind === :elementwise
+        for j in eachindex(val)
+            flat[k] = _scalar_inverse(spec.mask[j], val[j])
+            k += 1
+        end
+        return k
+    elseif kind === :cholesky
+        n1, n2 = spec.size
+        return _write_flat!(flat, cholesky_inverse(reshape(val, n1, n2)), k)
+    elseif kind === :expm
+        n1, _ = spec.size
+        return _write_flat!(flat, expm_inverse(_sym_from_upper(val, n1)), k)
+    elseif kind === :stickbreak
+        return _write_flat!(flat, stickbreak_inverse(val), k)
+    elseif kind === :stickbreakrows
+        n = spec.size[1]
+        return _write_flat!(flat, _stickbreakrow_inverse(val, n), k)
+    elseif kind === :lograterows
+        n = spec.size[1]
+        return _write_flat!(flat, lograterows_inverse(val, n), k)
+    else
+        return _write_flat!(flat, val, k)
+    end
 end
 
 # Legacy dynamic assembly (runtime names; ForwardDiff-compatible, not Enzyme-forward).
@@ -157,27 +287,54 @@ Map a k-1 vector of unconstrained reals to a k-probability vector via the
 inverse logistic stick-breaking transform. Recovers a valid probability vector
 summing to 1 with all entries in [0, 1].
 
-Non-mutating (Zygote-friendly): uses cumprod to build remaining probabilities.
+Single-allocation sequential fill. `remaining` carries the running product
+`∏_{j<i}(1-σ_j)` — the same left-to-right multiplication order as the historical
+`cumprod` formulation, so results are bit-identical. ForwardDiff/Enzyme-forward
+compatible (plain index assignment into a locally allocated, promoted-eltype
+vector); reverse-mode Zygote would need the old non-mutating `cumprod` form.
 """
 function stickbreak_inverse(t::AbstractVector{<:Real})
-    σ = logit_inverse.(t)           # k-1 sigmoid values in (0,1)
-    one_minus_σ = one.(σ) .- σ
-    # remainders[i] = prod(1-σ[1:i-1]); remainders[1]=1, remainders[k]=prod(1-σ)
-    remainders = cumprod(vcat(one(eltype(σ)), one_minus_σ))
     k1 = length(t)
-    return vcat(σ .* remainders[1:k1], remainders[(k1 + 1):(k1 + 1)])
+    T = typeof(logit_inverse(one(eltype(t))))
+    out = Vector{T}(undef, k1 + 1)
+    remaining = one(T)
+    @inbounds for i in 1:k1
+        σi = logit_inverse(t[i])
+        out[i] = σi * remaining
+        remaining *= one(T) - σi
+    end
+    out[k1 + 1] = remaining
+    return out
 end
 
 # Apply stickbreak_forward row-wise to an n×n matrix; returns n*(n-1) flat vector.
 function _stickbreakrow_forward(P::AbstractMatrix{<:Real})
     n = size(P, 1)
-    vcat([stickbreak_forward(P[i, :]) for i in 1:n]...)
+    r1 = stickbreak_forward(view(P, 1, :))
+    out = Vector{eltype(r1)}(undef, n * (n - 1))
+    copyto!(out, 1, r1, 1, n - 1)
+    for i in 2:n
+        ri = stickbreak_forward(view(P, i, :))
+        copyto!(out, (i - 1) * (n - 1) + 1, ri, 1, n - 1)
+    end
+    return out
 end
 
 # Apply stickbreak_inverse row-wise; reconstructs n×n row-stochastic matrix.
 function _stickbreakrow_inverse(t::AbstractVector{<:Real}, n::Int)
-    rows = [stickbreak_inverse(t[((i - 1) * (n - 1) + 1):(i * (n - 1))]) for i in 1:n]
-    reduce(vcat, [r' for r in rows])
+    k1 = n - 1
+    r1 = stickbreak_inverse(view(t, 1:k1))
+    M = Matrix{eltype(r1)}(undef, n, n)
+    for j in 1:n
+        M[1, j] = r1[j]
+    end
+    for i in 2:n
+        ri = stickbreak_inverse(view(t, ((i - 1) * k1 + 1):(i * k1)))
+        for j in 1:n
+            M[i, j] = ri[j]
+        end
+    end
+    return M
 end
 
 """
@@ -213,12 +370,18 @@ function lograterows_inverse(t::AbstractVector{<:Real}, n::Int)
     Q = zeros(T, n, n)
     idx = 1
     for i in 1:n
+        # Accumulate the row sum inline (same j-ascending order as the previous
+        # filtered-generator `sum`, so results are bit-identical) instead of
+        # re-walking the row through a lazy generator.
+        rowsum = zero(T)
         for j in 1:n
             i == j && continue
-            Q[i, j] = exp(T(t[idx]))
+            qij = exp(T(t[idx]))
+            Q[i, j] = qij
+            rowsum += qij
             idx += 1
         end
-        Q[i, i] = -sum(Q[i, j] for j in 1:n if j != i)
+        Q[i, i] = -rowsum
     end
     return Q
 end
@@ -379,11 +542,24 @@ function apply_inv_jacobian_T(
         it::InverseTransform, θt::ComponentArray, grad_u::ComponentArray)
     names = it.names
     specs = it.specs
-    vals = map(1:length(names)) do i
-        name = names[i]
-        spec = specs[i]
-        θti = θt[name]
-        gu = grad_u[name]
+    # Sequential flat fill on the θt layout. The previous `map` collected the
+    # heterogeneous per-parameter results into a boxed `Vector{Any}` and then wrote
+    # them back through a `setproperty!` loop — both boxing-heavy on a per-gradient
+    # path (FOCEI / identifiability). Per-spec math is unchanged (`_inv_jac_spec_val`).
+    flat = Vector{eltype(θt)}(undef, length(θt))
+    k = 1
+    for i in eachindex(names)
+        v = _inv_jac_spec_val(
+            specs[i], getproperty(θt, names[i]), getproperty(grad_u, names[i]))
+        k = _write_flat!(flat, v, k)
+    end
+    k == length(θt) + 1 ||
+        error("apply_inv_jacobian_T length mismatch: expected $(length(θt)), got $(k - 1).")
+    return ComponentArray(flat, getaxes(θt))
+end
+
+function _inv_jac_spec_val(spec::TransformSpec, θti, gu)
+    begin
         if spec.kind == :log
             return _safe_log_inv_jac.(gu, θti)
         elseif spec.kind == :logit
@@ -456,11 +632,6 @@ function apply_inv_jacobian_T(
             return gu
         end
     end
-    out = similar(θt)
-    for i in eachindex(names)
-        setproperty!(out, names[i], vals[i])
-    end
-    return out
 end
 
 function _transform_vals(

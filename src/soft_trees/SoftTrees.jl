@@ -159,9 +159,13 @@ function softtree_params_from_flat(θ::AbstractVector, tree::SoftTree)
     n_internal = 2^tree.depth - 1
     n_leaves = 2^tree.depth
     nw_len = n_internal * tree.input_dim
-    node_weights = reshape(θ[1:nw_len], n_internal, tree.input_dim)
-    node_biases = θ[nw_len .+ (1:n_internal)]
-    leaf_values = reshape(θ[(nw_len + n_internal) .+ (1:(tree.n_output * n_leaves))],
+    # Views, not copying getindex: this runs on every model-fun evaluation and the
+    # downstream eval only ever indexes elementwise (no BLAS), so reshaped views are
+    # free and AD-transparent.
+    node_weights = reshape(view(θ, 1:nw_len), n_internal, tree.input_dim)
+    node_biases = view(θ, nw_len .+ (1:n_internal))
+    leaf_values = reshape(
+        view(θ, (nw_len + n_internal) .+ (1:(tree.n_output * n_leaves))),
         tree.n_output, n_leaves)
     return SoftTreeParams(node_weights, node_biases, leaf_values)
 end
@@ -189,75 +193,72 @@ end
 end
 
 function (tree::SoftTree)(x::AbstractVector{<:Real}, params::SoftTreeParams)
-    # Pure implementation for AD friendliness (ForwardDiff/Enzyme/Zygote-compatible).
+    # BLAS-free, single-buffer implementation (ForwardDiff/Enzyme-compatible: plain
+    # index assignment into a locally allocated, promoted-eltype vector).
+    #
+    # Leaf probabilities are produced in LEVEL-CONCATENATION order — at each level
+    # the new vector is [old .* p ; old .* (1 .- p)] — exactly the order of the
+    # historical `vcat`-doubling implementation (bit-identical results). This order
+    # is the semantic anchor: fitted `SoftTreeParameters` pair leaf columns with it.
+    # Note it differs from binary-heap order by a bit-reversal permutation of leaves.
     length(x) == tree.input_dim ||
         error("Invalid input length. Expected $(tree.input_dim); got $(length(x)).")
-    T = promote_type(eltype(params.node_weights), eltype(x))
-    probs = [one(T)]
-    for level in 0:(tree.depth - 1)
+    n_leaves = 2^tree.depth
+    T = promote_type(
+        eltype(params.node_weights), eltype(params.node_biases), eltype(x))
+    probs = Vector{T}(undef, n_leaves)
+    probs[1] = one(T)
+    @inbounds for level in 0:(tree.depth - 1)
+        n_prev = 2^level
         start_idx = 2^level
-        end_idx = 2^(level + 1) - 1
-        pvec = [_sigmoid(_st_rowdot(params.node_weights, i, x) + params.node_biases[i])
-                for i in start_idx:end_idx]
-        probs = vcat(probs .* pvec, probs .* (one(T) .- pvec))
+        for k in 1:n_prev
+            old = probs[k]
+            p = _sigmoid(_st_rowdot(params.node_weights, start_idx + k - 1, x) +
+                         params.node_biases[start_idx + k - 1])
+            probs[n_prev + k] = old * (one(T) - p)
+            probs[k] = old * p
+        end
     end
     return [_st_leafdot(params.leaf_values, o, probs)
             for o in 1:size(params.leaf_values, 1)]
 end
 
+# NOTE on leaf ordering: the historical `Val(:fast)`/`Val(:inplace)` variants walked
+# the tree in binary-heap order (probs[2i], probs[2i+1]), which orders leaves by a
+# bit-reversal permutation of the default's level-concatenation order. For asymmetric
+# parameters the two therefore returned DIFFERENT values for the same `params` (the
+# old equality tests only passed at all-zero init). Both variants now share the
+# default's ordering so all three entry points agree for any parameters.
 function (tree::SoftTree)(
         x::AbstractVector{<:Real}, params::SoftTreeParams, ::Val{:inplace})
+    # Zygote-compatible variant: identical traversal to the default method, but the
+    # probability buffer is a Zygote.Buffer so reverse-mode AD can differentiate
+    # through the in-place writes.
     length(x) == tree.input_dim ||
         error("Invalid input length. Expected $(tree.input_dim); got $(length(x)).")
-    n_internal = 2^tree.depth - 1
     n_leaves = 2^tree.depth
-    T = promote_type(eltype(params.node_weights), eltype(x))
-
-    probs = Zygote.Buffer(zeros(T, n_internal + n_leaves))
+    T = promote_type(
+        eltype(params.node_weights), eltype(params.node_biases), eltype(x))
+    probs = Zygote.Buffer(zeros(T, n_leaves))
     probs[1] = one(T)
-    for i in 1:n_internal
-        w = view(params.node_weights, i, :)
-        b = params.node_biases[i]
-        p = _sigmoid(dot(w, x) + b)
-        left = 2i
-        right = 2i + 1
-        probs[left] = probs[i] * p
-        probs[right] = probs[i] * (one(T) - p)
+    for level in 0:(tree.depth - 1)
+        n_prev = 2^level
+        start_idx = 2^level
+        for k in 1:n_prev
+            old = probs[k]
+            p = _sigmoid(_st_rowdot(params.node_weights, start_idx + k - 1, x) +
+                         params.node_biases[start_idx + k - 1])
+            probs[n_prev + k] = old * (one(T) - p)
+            probs[k] = old * p
+        end
     end
-
-    y = Zygote.Buffer(zeros(T, tree.n_output))
-    for j in 1:n_leaves
-        prob = probs[n_internal + j]
-        y .= y .+ prob .* view(params.leaf_values, :, j)
-    end
-
-    return copy(y)
+    probs_v = copy(probs)
+    return [_st_leafdot(params.leaf_values, o, probs_v)
+            for o in 1:size(params.leaf_values, 1)]
 end
 
 function (tree::SoftTree)(x::AbstractVector{<:Real}, params::SoftTreeParams, ::Val{:fast})
-    length(x) == tree.input_dim ||
-        error("Invalid input length. Expected $(tree.input_dim); got $(length(x)).")
-    n_internal = 2^tree.depth - 1
-    n_leaves = 2^tree.depth
-    T = promote_type(eltype(params.node_weights), eltype(x))
-
-    probs = zeros(T, n_internal + n_leaves)
-    probs[1] = one(T)
-    for i in 1:n_internal
-        w = view(params.node_weights, i, :)
-        b = params.node_biases[i]
-        p = _sigmoid(dot(w, x) + b)
-        left = 2i
-        right = 2i + 1
-        probs[left] = probs[i] * p
-        probs[right] = probs[i] * (one(T) - p)
-    end
-
-    y = zeros(T, tree.n_output)
-    for j in 1:n_leaves
-        prob = probs[n_internal + j]
-        y .+= prob .* view(params.leaf_values, :, j)
-    end
-
-    return y
+    # Kept for API compatibility: the default method is now the single-buffer,
+    # BLAS-free implementation, so `Val(:fast)` simply delegates to it.
+    return tree(x, params)
 end

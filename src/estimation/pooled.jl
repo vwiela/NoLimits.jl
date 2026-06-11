@@ -279,19 +279,61 @@ function _compute_pooled_etas(dm::DataModel, θ::ComponentArray, strategies)
                 end
                 for i in 1:n]
     end
-    η_vec = Vector{ComponentArray}(undef, n)
-    for i in 1:n
-        ind = individuals[i]
-        dists = dists_builder(θs, ind.const_cov, model_funs, helpers)
-        nt_pairs = Pair{Symbol, Any}[]
-        for (ri, re) in enumerate(re_names)
-            dist = getproperty(dists, re)
-            val = _pooled_eta_value(dist, lp_cache.dims[ri], strategies[ri], T)
-            push!(nt_pairs, re => val)
-        end
-        η_vec[i] = ComponentArray(NamedTuple(nt_pairs))
+    # Heterogeneous-shape path (e.g. a dim-1 NPF RE kept as a 1-vector): probe the
+    # plug-in SHAPES once with the first individual to build the output axes (the
+    # boxed NamedTuple construction runs exactly once), then fill a flat vector per
+    # individual and wrap it with the probed axes — mirroring the fast path above.
+    # The historical per-individual `Pair{Symbol,Any}[]` + `ComponentArray(NamedTuple)`
+    # route boxed every plug-in value on every objective evaluation (measured ~50×
+    # per individual under ForwardDiff).
+    ind1 = individuals[1]
+    dists1 = dists_builder(θs, ind1.const_cov, model_funs, helpers)
+    probe_vals = map(enumerate(re_names)) do (ri, re)
+        _pooled_eta_value(getproperty(dists1, re), lp_cache.dims[ri], strategies[ri], T)
     end
-    return η_vec
+    proto = ComponentArray(NamedTuple{Tuple(re_names)}(Tuple(probe_vals)))
+    axs = getaxes(proto)
+    ηlen = length(proto)
+    # An RE distribution can only vary across individuals through CONSTANT
+    # covariates (validated at DataModel construction). When a RE's distribution
+    # expression references none, its plug-in value is individual-invariant and the
+    # probe value is reused for everyone — `_pooled_eta_value` can be expensive
+    # (e.g. the NPF MC plug-in evaluates the flow once per stored draw).
+    re_syms = get_re_syms(model.random.random)
+    const_names = model.covariates.covariates.constants
+    invariant = map(re -> isempty(intersect(getfield(re_syms, re), const_names)),
+        re_names)
+    return [begin
+                vals = Vector{T}(undef, ηlen)
+                pos = 1
+                if i == 1 || all(invariant)
+                    for val in probe_vals
+                        pos = _pooled_fill_eta!(vals, pos, val)
+                    end
+                else
+                    ind = individuals[i]
+                    dists = dists_builder(θs, ind.const_cov, model_funs, helpers)
+                    for (ri, re) in enumerate(re_names)
+                        val = invariant[ri] ? probe_vals[ri] :
+                              _pooled_eta_value(getproperty(dists, re),
+                            lp_cache.dims[ri], strategies[ri], T)
+                        pos = _pooled_fill_eta!(vals, pos, val)
+                    end
+                end
+                ComponentArray(vals, axs)
+            end
+            for i in 1:n]
+end
+
+@inline function _pooled_fill_eta!(vals::Vector, pos::Int, val::Number)
+    vals[pos] = val
+    return pos + 1
+end
+@inline function _pooled_fill_eta!(vals::Vector, pos::Int, val)
+    for k in eachindex(val)
+        vals[pos + k - 1] = val[k]
+    end
+    return pos + length(val)
 end
 
 # Flat vector of all plug-in values across individuals — the function of θ that

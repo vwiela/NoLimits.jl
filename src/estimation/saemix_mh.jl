@@ -111,6 +111,7 @@ mutable struct _SaemixMHState
     level_plp::Vector{Float64}         # prior log-pdf per free level
     levels::Vector{_SaemixMHLevel}  # pre-built level metadata
     domega2::Vector{Matrix{Float64}} # per-level saemix RW scales, indexed by (dim, block_size)
+    ll_scratch::Vector{Float64}     # per-proposal lls for multi-individual levels
     n_accept::Int
     n_total::Int
 end
@@ -334,8 +335,11 @@ function _saemixmh_init_state(dm::DataModel,
     level_plp = Vector{Float64}(undef, length(levels))
     _saemixmh_level_plp!(level_plp, levels, dm, θ, const_cache, cache, b)
     domega2 = _saemixmh_init_domega2(levels, dm, θ, const_cache, cache, re_names, rw_init)
+    # Scratch for multi-individual levels: sized to the largest level group so the
+    # accept/reject step never allocates (was one Vector per proposal per step).
+    max_group = isempty(levels) ? 0 : maximum(length(lv.group_pos) for lv in levels)
     return _SaemixMHState(b, similar(b), indiv_ll, level_plp, levels,
-        domega2, 0, 0)
+        domega2, Vector{Float64}(undef, max_group), 0, 0)
 end
 
 # ---------------------------------------------------------------------------
@@ -408,7 +412,7 @@ function _saemixmh_kern1!(state::_SaemixMHState,
                 end
             else
                 Δ_ll = 0.0
-                new_ll = Vector{Float64}(undef, length(lv.group_pos))
+                new_ll = state.ll_scratch   # filled 1:length(lv.group_pos) below
                 for (gi, pos) in enumerate(lv.group_pos)
                     i = batch_info.inds[pos]
                     η_ind = _build_eta_ind(dm, i, batch_info, b_prop, const_cache, θ_re)
@@ -504,7 +508,7 @@ function _saemixmh_kern2!(state::_SaemixMHState,
                     end
                 else
                     Δ_ll = 0.0
-                    new_ll = Vector{Float64}(undef, length(lv.group_pos))
+                    new_ll = state.ll_scratch   # filled 1:length(lv.group_pos) below
                     for (gi, pos) in enumerate(lv.group_pos)
                         i = batch_info.inds[pos]
                         η_ind = _build_eta_ind(dm, i, batch_info, b_prop, const_cache, θ_re)
@@ -623,7 +627,7 @@ function _saemixmh_kern3!(state::_SaemixMHState,
                     end
                 else
                     Δ_ll = 0.0
-                    new_ll = Vector{Float64}(undef, length(lv.group_pos))
+                    new_ll = state.ll_scratch   # filled 1:length(lv.group_pos) below
                     for (gi, pos) in enumerate(lv.group_pos)
                         i = batch_info.inds[pos]
                         η_ind = _build_eta_ind(dm, i, batch_info, b_prop, const_cache, θ_re)

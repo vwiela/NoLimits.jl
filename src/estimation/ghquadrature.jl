@@ -214,6 +214,32 @@ function _build_anisotropic_batch_grid(
 end
 
 # ---------------------------------------------------------------------------
+# Positional free/constants merge (mirrors mle.jl): the flat positions of the
+# free parameters inside the full transformed vector are precomputed once, so
+# the per-evaluation merge is plain positional indexing. The old per-name
+# `setproperty!` loop dispatches on runtime Symbols, which Enzyme's runtime
+# rules reject and which costs a fresh ComponentArray + dynamic writes per call.
+# ---------------------------------------------------------------------------
+function _ghq_free_idx(θ_const_t::ComponentArray, θ0_free_t::ComponentArray)
+    lab_full = ComponentArrays.labels(θ_const_t)
+    lab_free = ComponentArrays.labels(θ0_free_t)
+    pos_full = Dict{String, Int}(lab_full[i] => i for i in eachindex(lab_full))
+    return Int[pos_full[l] for l in lab_free]
+end
+
+function _ghq_merge_full(θ_const_t_vec::Vector, free_idx::Vector{Int}, v_free, axs_full)
+    T = eltype(v_free)
+    full = Vector{T}(undef, length(θ_const_t_vec))
+    @inbounds for i in eachindex(full)
+        full[i] = θ_const_t_vec[i]
+    end
+    @inbounds for k in eachindex(free_idx)
+        full[free_idx[k]] = v_free[k]
+    end
+    return ComponentArray(full, axs_full)
+end
+
+# ---------------------------------------------------------------------------
 # Cache pre-population helpers
 # ---------------------------------------------------------------------------
 
@@ -342,16 +368,16 @@ function _fit_model_scalar(dm::DataModel, method::GHQuadrature, args...;
     θ0_free_t = θ0_t[free_names]
     axs_free = getaxes(θ0_free_t)
     axs_full = getaxes(θ_const_t)
+    free_idx = _ghq_free_idx(θ_const_t, θ0_free_t)
+    θ_const_t_vec = collect(θ_const_t)
 
     function obj(θt, p)
         θt_free = θt isa ComponentArray ? θt : ComponentArray(θt, axs_free)
         T = eltype(θt_free)
         infT = convert(T, Inf)
 
-        θt_full = ComponentArray(T.(θ_const_t), axs_full)
-        for name in free_names
-            setproperty!(θt_full, name, getproperty(θt_free, name))
-        end
+        θt_full = _ghq_merge_full(
+            θ_const_t_vec, free_idx, ComponentArrays.getdata(θt_free), axs_full)
         θu = inv_transform(θt_full)
         θu_re = _symmetrize_psd_params(θu, dm.model.fixed.fixed)
 
@@ -433,11 +459,8 @@ function _fit_model_scalar(dm::DataModel, method::GHQuadrature, args...;
     θ_hat_t_raw = sol.u
     θ_hat_t_free = θ_hat_t_raw isa ComponentArray ?
                    θ_hat_t_raw : ComponentArray(θ_hat_t_raw, axs_free)
-    T = eltype(θ_hat_t_free)
-    θ_hat_t = ComponentArray(T.(θ_const_t), axs_full)
-    for name in free_names
-        setproperty!(θ_hat_t, name, getproperty(θ_hat_t_free, name))
-    end
+    θ_hat_t = _ghq_merge_full(
+        θ_const_t_vec, free_idx, ComponentArrays.getdata(θ_hat_t_free), axs_full)
     θ_hat_u = inv_transform(θ_hat_t)
 
     # ── Post-hoc EB mode finding (for get_random_effects) ────────────────────
@@ -696,31 +719,40 @@ function _fit_model_scalar(dm::DataModel, method::GHQuadratureMAP, args...;
     θ0_free_t = θ0_t[free_names]
     axs_free = getaxes(θ0_free_t)
     axs_full = getaxes(θ_const_t)
+    free_idx = _ghq_free_idx(θ_const_t, θ0_free_t)
+    θ_const_t_vec = collect(θ_const_t)
 
     function obj(θt, p)
         θt_free = θt isa ComponentArray ? θt : ComponentArray(θt, axs_free)
         T = eltype(θt_free)
         infT = convert(T, Inf)
 
-        θt_full = ComponentArray(T.(θ_const_t), axs_full)
-        for name in free_names
-            setproperty!(θt_full, name, getproperty(θt_free, name))
-        end
+        θt_full = _ghq_merge_full(
+            θ_const_t_vec, free_idx, ComponentArrays.getdata(θt_free), axs_full)
         θu = inv_transform(θt_full)
         θu_re = _symmetrize_psd_params(θu, dm.model.fixed.fixed)
 
         total = if ll_cache isa AbstractVector
             results = Vector{T}(undef, length(batch_infos))
             bad = Threads.Atomic{Bool}(false)
-            Threads.@threads for bi in eachindex(batch_infos)
-                tid = Threads.threadid()
-                bll = _ghq_batch_ll(dm, batch_infos[bi], θu_re, const_cache,
-                    ll_cache[tid], method.level)
-                if bll == -Inf
-                    Threads.atomic_or!(bad, true)
-                    results[bi] = zero(T)
-                else
-                    results[bi] = T(bll)
+            # Chunk-indexed cache assignment — `Threads.threadid()` indexing is
+            # unsafe under task migration (two tasks could share one cache slot).
+            n_chunks = length(ll_cache)
+            Threads.@threads for c in 1:n_chunks
+                cache_c = ll_cache[c]
+                for bi in c:n_chunks:length(batch_infos)
+                    if bad[]
+                        results[bi] = zero(T)
+                        continue
+                    end
+                    bll = _ghq_batch_ll(dm, batch_infos[bi], θu_re, const_cache,
+                        cache_c, method.level)
+                    if bll == -Inf
+                        Threads.atomic_or!(bad, true)
+                        results[bi] = zero(T)
+                    else
+                        results[bi] = T(bll)
+                    end
                 end
             end
             bad[] && return infT
@@ -788,11 +820,8 @@ function _fit_model_scalar(dm::DataModel, method::GHQuadratureMAP, args...;
     θ_hat_t_raw = sol.u
     θ_hat_t_free = θ_hat_t_raw isa ComponentArray ?
                    θ_hat_t_raw : ComponentArray(θ_hat_t_raw, axs_free)
-    T = eltype(θ_hat_t_free)
-    θ_hat_t = ComponentArray(T.(θ_const_t), axs_full)
-    for name in free_names
-        setproperty!(θ_hat_t, name, getproperty(θ_hat_t_free, name))
-    end
+    θ_hat_t = _ghq_merge_full(
+        θ_const_t_vec, free_idx, ComponentArrays.getdata(θ_hat_t_free), axs_full)
     θ_hat_u = inv_transform(θ_hat_t)
 
     # ── Post-hoc EB mode finding (for get_random_effects) ────────────────────

@@ -1669,36 +1669,45 @@ function _saem_collect_hmm_stats_individual(dm::DataModel,
         sol_accessors = get_de_accessors_builder(model.de.de)(sol, compiled)
     end
 
-    seq_dist = Dict{Symbol, Vector{Any}}()
-    seq_y = Dict{Symbol, Vector{Any}}()
-    for col in keys(hmm_emission_params)
-        seq_dist[col] = Any[]
-        seq_y[col] = Any[]
-    end
+    # Per-column row sequences: preallocated, index-written vectors keyed by a
+    # NamedTuple (the row count and column set are both known up front) — the
+    # previous `Dict{Symbol, Vector{Any}}` + per-row `push!` re-hashed the column
+    # symbol and grew the vectors on every observation row.
+    emi_cols = keys(hmm_emission_params)
+    n_rows = length(obs_rows)
+    seq_dist = NamedTuple{emi_cols}(ntuple(_ -> Vector{Any}(undef, n_rows),
+        length(emi_cols)))
+    seq_y = NamedTuple{emi_cols}(ntuple(_ -> Vector{Any}(undef, n_rows),
+        length(emi_cols)))
 
     time_col = _get_col(dm.df, dm.config.time_col)[obs_rows]
     rowwise_re = _needs_rowwise_random_effects(dm, idx; obs_only = true)
+    η_ind isa NamedTuple && (η_ind = ComponentArray(η_ind))
+    row_tmpl = rowwise_re && n_rows > 0 ?
+               _row_re_template(dm, idx, 1, η_ind; obs_only = true) : nothing
     for i in eachindex(obs_rows)
         vary = vary_cache === nothing ? _varying_at(dm, ind, i, time_col) : vary_cache[i]
-        η_row = _row_random_effects_at(dm, idx, i, η_ind, rowwise_re; obs_only = true)
+        η_row = rowwise_re ?
+                _row_random_effects_fill(dm, idx, i, η_ind, row_tmpl; obs_only = true) :
+                η_ind
         obs = sol_accessors === nothing ?
               calculate_formulas_obs(model, θ, η_row, const_cov, vary) :
               calculate_formulas_obs(model, θ, η_row, const_cov, vary, sol_accessors)
-        for col in keys(hmm_emission_params)
+        for col in emi_cols
             dist = getproperty(obs, col)
             _saem_is_hmm_distribution(dist) || return (NamedTuple(), false)
-            push!(seq_dist[col], dist)
-            push!(seq_y[col], getfield(obs_series, col)[i])
+            getfield(seq_dist, col)[i] = dist
+            getfield(seq_y, col)[i] = getfield(obs_series, col)[i]
         end
     end
 
     Tstats = promote_type(eltype(θ), Float64)
     pairs = Pair{Symbol, Any}[]
-    for col in keys(hmm_emission_params)
+    for col in emi_cols
         info = getfield(hmm_emission_params, col)
         _saem_hmm_emission_mapping_supported(info) || return (NamedTuple(), false)
         st, ok = _saem_hmm_bernoulli_stats_from_sequence(
-            seq_dist[col], seq_y[col], info.target, Tstats)
+            getfield(seq_dist, col), getfield(seq_y, col), info.target, Tstats)
         ok || return (NamedTuple(), false)
         push!(pairs, col => st)
     end

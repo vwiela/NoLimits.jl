@@ -1775,6 +1775,56 @@ function _row_random_effects_at(dm::DataModel,
     return ComponentArray(NamedTuple(nt_pairs))
 end
 
+# ---------------------------------------------------------------------------------
+# Per-individual rowwise-η template: the row-η ComponentArray has the SAME axes for
+# every row of a given individual (only the selected values differ), so hot row
+# loops derive the axes once — via the generic boxing path above on the first
+# iterated row — and then fill a fresh flat vector per row. This replaces the
+# per-row `Pair{Symbol,Any}[]` + `ComponentArray(NamedTuple)` construction
+# (measured ~1.9 KB / 1.8 μs per row) with a single typed-vector fill.
+# ---------------------------------------------------------------------------------
+struct _RowREFill{A}
+    axs::A
+    len::Int
+end
+
+function _row_re_template(dm::DataModel, idx::Int, first_row::Int,
+        η_ind::ComponentArray; obs_only::Bool = true)
+    proto = _row_random_effects_at(dm, idx, first_row, η_ind, true; obs_only = obs_only)
+    return _RowREFill(getaxes(proto), length(proto))
+end
+
+function _row_random_effects_fill(dm::DataModel, idx::Int, row_idx::Int,
+        η_ind::ComponentArray, tmpl::_RowREFill; obs_only::Bool = true)
+    re_names = get_re_names(dm.model.random.random)
+    ind = dm.individuals[idx]
+    info = dm.re_group_info.index_by_individual
+    vals = Vector{eltype(η_ind)}(undef, tmpl.len)
+    pos = 1
+    for re in re_names
+        η_re = getproperty(η_ind, re)
+        nlevels = length(getfield(ind.re_groups, re))
+        sel = if nlevels <= 1
+            η_re
+        else
+            re_info = getfield(info, re)
+            positions = obs_only ? re_info.unique_pos_obs[idx] :
+                        re_info.unique_pos_all[idx]
+            η_re[positions[row_idx]]
+        end
+        if sel isa Number
+            vals[pos] = sel
+            pos += 1
+        else
+            for k in eachindex(sel)
+                vals[pos] = sel[k]
+                pos += 1
+            end
+        end
+    end
+    return ComponentArray(vals, tmpl.axs)
+end
+
 mutable struct _LLCache{H, M, S, A, O, K, P, V, SA}
     helpers::H
     model_funs::M
@@ -1983,9 +2033,11 @@ function _loglikelihood_individual_rowwise(dm::DataModel, idx::Int, θ, η_ind,
     T_el = promote_type(eltype(θ), eltype(η_ind))
     ll = zero(T_el)
     obs_cols = dm.config.obs_cols
+    isempty(obs_rows) && return ll
+    row_tmpl = _row_re_template(dm, idx, 1, η_ind; obs_only = true)
     for i in eachindex(obs_rows)
         vary = vary_cache === nothing ? _varying_at(dm, ind, i, t_obs) : vary_cache[i]
-        η_row = _row_random_effects_at(dm, idx, i, η_ind, true; obs_only = true)
+        η_row = _row_random_effects_fill(dm, idx, i, η_ind, row_tmpl; obs_only = true)
         obs = sol_accessors === nothing ?
               calculate_formulas_obs(model, θ, η_row, const_cov, vary) :
               calculate_formulas_obs(model, θ, η_row, const_cov, vary, sol_accessors)
@@ -2039,11 +2091,13 @@ function _loglikelihood_rows_hmm(dm::DataModel, idx::Int, θ, η_ind, cache::_LL
         helpers = cache.helpers, model_funs = cache.model_funs)
     sol_acc = sol_accessors === nothing ? NamedTuple() : sol_accessors
     t_obs = vary_cache === nothing ? _get_col(dm.df, dm.config.time_col)[obs_rows] : nothing
+    row_tmpl = rowwise_re ? _row_re_template(dm, idx, i_start, η_ind; obs_only = true) :
+               nothing
     ll = zero(T_hmm)
     for i in i_start:length(obs_rows)
         vary = vary_cache === nothing ? _varying_at(dm, ind, i, t_obs) : vary_cache[i]
         obs = if rowwise_re
-            η_row = _row_random_effects_at(dm, idx, i, η_ind, true; obs_only = true)
+            η_row = _row_random_effects_fill(dm, idx, i, η_ind, row_tmpl; obs_only = true)
             sol_accessors === nothing ?
             calculate_formulas_obs(model, θ, η_row, const_cov, vary) :
             calculate_formulas_obs(model, θ, η_row, const_cov, vary, sol_accessors)
@@ -2200,10 +2254,16 @@ function _resid_stats_individual(dm::DataModel, idx::Int, θ, η_ind, cache::_LL
           (; fixed_effects = θ, random_effects = η_ind, prede = pre,
         helpers = cache.helpers, model_funs = cache.model_funs)
     sol_acc = sol_accessors === nothing ? NamedTuple() : sol_accessors
+    row_tmpl = if rowwise_re && !isempty(obs_rows)
+        η_ind isa NamedTuple && (η_ind = ComponentArray(η_ind))
+        _row_re_template(dm, idx, 1, η_ind; obs_only = true)
+    else
+        nothing
+    end
     for i in eachindex(obs_rows)
         vary = vary_cache === nothing ? _varying_at(dm, ind, i, time_col) : vary_cache[i]
         obs = if rowwise_re
-            η_row = _row_random_effects_at(dm, idx, i, η_ind, true; obs_only = true)
+            η_row = _row_random_effects_fill(dm, idx, i, η_ind, row_tmpl; obs_only = true)
             sol_accessors === nothing ?
             calculate_formulas_obs(model, θ, η_row, const_cov, vary) :
             calculate_formulas_obs(model, θ, η_row, const_cov, vary, sol_accessors)
@@ -2257,10 +2317,16 @@ function _resid_stats_individual_cols(dm::DataModel, idx::Int, θ, η_ind, cache
           (; fixed_effects = θ, random_effects = η_ind, prede = pre,
         helpers = cache.helpers, model_funs = cache.model_funs)
     sol_acc = sol_accessors === nothing ? NamedTuple() : sol_accessors
+    row_tmpl = if rowwise_re && !isempty(obs_rows)
+        η_ind isa NamedTuple && (η_ind = ComponentArray(η_ind))
+        _row_re_template(dm, idx, 1, η_ind; obs_only = true)
+    else
+        nothing
+    end
     for i in eachindex(obs_rows)
         vary = vary_cache === nothing ? _varying_at(dm, ind, i, time_col) : vary_cache[i]
         obs = if rowwise_re
-            η_row = _row_random_effects_at(dm, idx, i, η_ind, true; obs_only = true)
+            η_row = _row_random_effects_fill(dm, idx, i, η_ind, row_tmpl; obs_only = true)
             sol_accessors === nothing ?
             calculate_formulas_obs(model, θ, η_row, const_cov, vary) :
             calculate_formulas_obs(model, θ, η_row, const_cov, vary, sol_accessors)
@@ -2414,6 +2480,11 @@ function loglikelihood(dm::DataModel, θ::ComponentArray, η;
         serialization::SciMLBase.EnsembleAlgorithm = EnsembleThreads(),
         cache = nothing)
     θ = _symmetrize_psd_params(θ, dm.model.fixed.fixed)
+    # A shared NamedTuple η would otherwise be converted to a ComponentArray inside
+    # EVERY `_loglikelihood_individual` call (measured 15× on simple models) —
+    # convert once up front. (Vector-of-NamedTuple elements are used once each, so
+    # they are left to the per-call guard.)
+    η isa NamedTuple && (η = ComponentArray(η))
     if cache === nothing
         cache = build_ll_cache(
             dm; ode_args = ode_args, ode_kwargs = ode_kwargs, serialization = serialization)
@@ -2437,15 +2508,22 @@ function loglikelihood(dm::DataModel, θ::ComponentArray, η;
         T = promote_type(eltype(θ), η_eltype)
         by_individual = Vector{T}(undef, n)
         bad = Threads.Atomic{Bool}(false)
-        Threads.@threads for i in 1:n
-            bad[] && continue
-            tid = Threads.threadid()
-            η_ind = η isa Vector ? η[i] : η
-            lli = _loglikelihood_individual(dm, i, θ, η_ind, caches[tid])
-            if !isfinite(lli)
-                bad[] = true
-            else
-                by_individual[i] = lli
+        # Chunk-indexed cache assignment: each task owns cache slot `c` for its whole
+        # stride. Indexing by `Threads.threadid()` is unsafe under task migration
+        # (`@threads :dynamic` may move a task between threads at yield points,
+        # letting two tasks share one cache slot).
+        n_chunks = length(caches)
+        Threads.@threads for c in 1:n_chunks
+            cache_c = caches[c]
+            for i in c:n_chunks:n
+                bad[] && break
+                η_ind = η isa Vector ? η[i] : η
+                lli = _loglikelihood_individual(dm, i, θ, η_ind, cache_c)
+                if !isfinite(lli)
+                    bad[] = true
+                else
+                    by_individual[i] = lli
+                end
             end
         end
         bad[] && return -Inf

@@ -682,6 +682,23 @@ function _is_prior_sample_batch(dm::DataModel,
     dists_builder = get_create_random_effect_distribution(dm.model.random.random)
     model_funs = cache.model_funs
     helpers = cache.helpers
+    # Hoist the per-level prior distributions out of the sample loop: they depend
+    # only on (θ, const_cov of the level representative), both invariant across the
+    # n_samples draws. Rebuilding the full RE NamedTuple plus the runtime-Symbol
+    # `getproperty` per draw measured 2.2× slower at the 500-sample default.
+    dist_table = [begin
+                      re_info = info.re_info[ri]
+                      # `map(identity, ...)` narrows the Any-inferred comprehension to a
+                      # concrete eltype for single-family REs → typed rand/logpdf below.
+                      map(identity,
+                          [getproperty(
+                               dists_builder(θ,
+                                   dm.individuals[re_info.reps[li]].const_cov,
+                                   model_funs, helpers),
+                               re)
+                           for li in eachindex(re_info.map.levels)])
+                  end
+                  for (ri, re) in enumerate(re_names)]
     samples = Matrix{Float64}(undef, nb, n_samples)
     log_qs = zeros(Float64, n_samples)
     for m in 1:n_samples
@@ -691,12 +708,10 @@ function _is_prior_sample_batch(dm::DataModel,
             re_info = info.re_info[ri]
             levels = re_info.map.levels
             isempty(levels) && continue
+            dists_ri = dist_table[ri]
             for (li, _) in enumerate(levels)
                 r = re_info.ranges[li]
-                rep_idx = re_info.reps[li]
-                const_cov = dm.individuals[rep_idx].const_cov
-                dists = dists_builder(θ, const_cov, model_funs, helpers)
-                dist = getproperty(dists, re)
+                dist = dists_ri[li]
                 draw = rand(rng, dist)
                 if re_info.is_scalar
                     b[first(r)] = draw isa AbstractVector ? draw[1] : Float64(draw)
@@ -808,6 +823,14 @@ function _is_gaussian_sample_batch(dm::DataModel,
     if nb == 0
         return (zeros(Float64, 0, n_samples), zeros(Float64, n_samples))
     end
+    # Memoise the per-block proposal densities across the sample loop — μ/C are
+    # invariant over the n_samples draws, but the scalar Normal (with its sqrt)
+    # and the MvNormal (dense covariance copy + Cholesky inside the constructor)
+    # were rebuilt once per draw per level. Built lazily on first use so the
+    # construction conditions (and any covariance-degeneracy behaviour) match the
+    # historical per-draw code exactly.
+    q_scalar = Vector{Union{Nothing, Normal{Float64}}}(nothing, length(blocks))
+    q_mv = Vector{Union{Nothing, MvNormal}}(nothing, length(blocks))
     samples = Matrix{Float64}(undef, nb, n_samples)
     log_qs = zeros(Float64, n_samples)
     for m in 1:n_samples
@@ -832,14 +855,27 @@ function _is_gaussian_sample_batch(dm::DataModel,
                     η_val = η isa AbstractVector ? η[1] : Float64(η)
                     b[first(r)] = η_val
                     z_val = dim == 1 ? z[1] : z[1]
-                    lq += logpdf(Normal(μ[1], sqrt(max(block.C[1, 1], 1e-14))), z_val) +
+                    qs = q_scalar[ri]
+                    if qs === nothing
+                        qs = Normal(μ[1], sqrt(max(block.C[1, 1], 1e-14)))
+                        q_scalar[ri] = qs
+                    end
+                    lq += logpdf(qs, z_val) +
                           _bij_log_jac_forward(re_type, z_val)
                 else
                     b[r] .= η
                     # Multivariate Gaussian log-density: -0.5*(z-μ)'C⁻¹(z-μ) - 0.5*logdet(2πC)
                     zv = Vector{Float64}(z)
-                    Cfull = Symmetric(block.C .+ 1e-14 .* I(dim))
-                    lq += logpdf(MvNormal(μ, Cfull), zv) +
+                    qm = q_mv[ri]
+                    if qm === nothing
+                        Cfull = Matrix(block.C)
+                        for d in 1:dim
+                            Cfull[d, d] += 1e-14
+                        end
+                        qm = MvNormal(μ, Symmetric(Cfull))
+                        q_mv[ri] = qm
+                    end
+                    lq += logpdf(qm, zv) +
                           _bij_log_jac_forward(re_type, zv)
                 end
             end

@@ -102,7 +102,7 @@ function batch_loglik_ghq(
 
     # Determine accumulator element type from the RE measure.
     # When θ carries ForwardDiff.Dual tags, re_measure.μ has Dual elements,
-    # so T = Dual. The Array{T} allocation handles type promotion seamlessly.
+    # so T = Dual. The Array{T} allocation handles type promotion.
     T = eltype(re_measure)
 
     a_vals = Vector{T}(undef, R)
@@ -113,10 +113,14 @@ function batch_loglik_ghq(
     re_cache = dm.re_group_info.laplace_cache
     template = re_cache === nothing ? nothing : re_cache.eta_template
     η_buf = template === nothing ? nothing : Vector{T}(undef, length(template))
+    # Same lifetime contract for the transformed node: `b_r` is consumed (copied
+    # into η) inside the iteration, so `transform!` reuses one buffer instead of
+    # allocating a fresh T-vector per node (bit-identical — see remeasure.jl).
+    b_buf = Vector{T}(undef, _transform_buffer_len(re_measure))
 
     @inbounds for r in 1:R
         z_r = view(sgrid.nodes, :, r)                 # Float64 column view, no alloc
-        b_r = transform(re_measure, z_r)              # T-valued: μ + L * z_r
+        b_r = transform!(b_buf, re_measure, z_r)      # T-valued: μ + L * z_r
 
         # Sum conditional log-likelihoods over all individuals in batch
         cond = zero(T)

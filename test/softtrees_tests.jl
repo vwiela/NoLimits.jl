@@ -21,6 +21,13 @@ using Random
     @test length(y) == 4
     @test isapprox(y, y_fast; rtol = 1e-10, atol = 1e-12)
 
+    # Equality must hold for ASYMMETRIC parameters too (the all-zero `params` above
+    # makes every leaf weight equal, which would hide a leaf-ordering mismatch
+    # between the eval variants — exactly the latent bug fixed in 2026-06).
+    y_r = tree(x, params_rand)
+    @test isapprox(y_r, tree(x, params_rand, Val(:fast)); rtol = 1e-10, atol = 1e-12)
+    @test isapprox(y_r, tree(x, params_rand, Val(:inplace)); rtol = 1e-10, atol = 1e-12)
+
     @test_throws ErrorException SoftTree(0, 2, 4)
     @test_throws ErrorException SoftTree(3, 0, 4)
     @test_throws ErrorException SoftTree(3, 2, 0)

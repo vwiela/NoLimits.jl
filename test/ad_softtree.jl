@@ -2,6 +2,7 @@ using Test
 using NoLimits
 using DifferentiationInterface
 using ForwardDiff
+using Random
 
 function _softtree_scalar(x, tree, params)
     return sum(tree(x, params))
@@ -9,8 +10,10 @@ end
 
 @testset "SoftTree AD" begin
     # Compare gradients across AD backends for inputs and parameters.
+    # Random (asymmetric) params: all-zero init makes leaf probabilities uniform,
+    # which would mask any leaf-ordering disagreement between the eval variants.
     tree = SoftTree(3, 2, 2)
-    params = init_params(tree)
+    params = init_params(tree, Xoshiro(7))
     x = [0.1, -0.2, 0.3]
 
     f(xv) = _softtree_scalar(xv, tree, params)

@@ -422,8 +422,12 @@ function _amh_haario_update!(block::_REAdaptBlock, z::AbstractVector{<:Real},
     end
     if n >= max(adapt_start + 1, 2)
         λ = 2.38^2 / d
-        Id = Matrix{Float64}(I(d))
-        @. block.C = λ * block.S_run / (n - 1) + eps_reg * Id
+        # Scale into C, then add the regulariser to the diagonal only — the
+        # previous `eps_reg * Id` materialised a dense d×d identity per MH step.
+        @. block.C = λ * block.S_run / (n - 1)
+        for j in 1:d
+            block.C[j, j] += eps_reg
+        end
         block.C_chol_L .= _amh_chol_L(block.C, d)
     end
 end
