@@ -59,7 +59,7 @@ Turing = "fce5fe82-541a-59a6-adf8-730c64b5f9a0"
 Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
 [compat]
-AdvancedVI = "0.6.2"
+AdvancedVI = "0.6.2, 0.7"
 Bijectors = "0.15.15, 0.16"
 CSV = "0.10.15"
 ComponentArrays = "0.15"
