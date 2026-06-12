@@ -66,10 +66,18 @@ end
 Compute posterior probabilities of hidden states given observation `y`.
 """
 function posterior_hidden_states(hmm::DiscreteTimeDiscreteStatesHMM, y::Real)
-    p_hidden = probabilities_hidden_states(hmm)
-    p_obs_given_state = pdf.(hmm.emission_dists, Ref(y))
-    unnormalized = p_hidden .* p_obs_given_state
-    return unnormalized ./ sum(unnormalized)
+    # Same op order as the former vector pipeline (propagate, normalise by the
+    # same sum, weight by the emission pdf, normalise) with the per-state steps
+    # fused into tuples — bit-identical values, one matvec + the output vector
+    # instead of four intermediate vectors per call (this runs once per row in
+    # the HMM forward filter).
+    p = transpose(hmm.transition_matrix) * hmm.initial_dist.p
+    s = sum(p)
+    dists = hmm.emission_dists
+    pt = _hmm_probs_tuple(p, dists)
+    u = map((pi, d) -> (pi / s) * pdf(d, y), pt, dists)
+    su = sum(u)
+    return [ui / su for ui in u]
 end
 
 function Distributions.pdf(hmm::DiscreteTimeDiscreteStatesHMM, y::Real)
@@ -79,9 +87,14 @@ function Distributions.pdf(hmm::DiscreteTimeDiscreteStatesHMM, y::Real)
 end
 
 function Distributions.logpdf(hmm::DiscreteTimeDiscreteStatesHMM, y::Real)
-    log_p_hidden = log.(probabilities_hidden_states(hmm))
-    log_p_obs = logpdf.(hmm.emission_dists, Ref(y))
-    return _hmm_logsumexp(log_p_hidden .+ log_p_obs)
+    # Tuple-fused twin of the former vector pipeline (see posterior_hidden_states):
+    # the propagation matvec is the only remaining allocation per call.
+    p = transpose(hmm.transition_matrix) * hmm.initial_dist.p
+    s = sum(p)
+    dists = hmm.emission_dists
+    pt = _hmm_probs_tuple(p, dists)
+    xs = map((pi, d) -> log(pi / s) + logpdf(d, y), pt, dists)
+    return _hmm_logsumexp(xs)
 end
 
 function Distributions.rand(rng::AbstractRNG, hmm::DiscreteTimeDiscreteStatesHMM)

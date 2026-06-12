@@ -2479,24 +2479,27 @@ function loglikelihood(dm::DataModel, θ::ComponentArray, η;
         ode_kwargs::NamedTuple = NamedTuple(),
         serialization::SciMLBase.EnsembleAlgorithm = EnsembleThreads(),
         cache = nothing)
-    θ = _symmetrize_psd_params(θ, dm.model.fixed.fixed)
+    # Fresh bindings throughout: `θ` and `η` are captured by the threaded closure
+    # below, and reassigning a captured variable boxes it (`Core.Box`) — which made
+    # every `η[i]` lookup and the whole serial loop dynamically typed (measured
+    # ~1 KB/individual of boxing overhead on a 16 B/individual evaluation).
+    θs = _symmetrize_psd_params(θ, dm.model.fixed.fixed)
     # A shared NamedTuple η would otherwise be converted to a ComponentArray inside
     # EVERY `_loglikelihood_individual` call (measured 15× on simple models) —
     # convert once up front. (Vector-of-NamedTuple elements are used once each, so
     # they are left to the per-call guard.)
-    η isa NamedTuple && (η = ComponentArray(η))
-    if cache === nothing
-        cache = build_ll_cache(
-            dm; ode_args = ode_args, ode_kwargs = ode_kwargs, serialization = serialization)
-    end
+    ηs = η isa NamedTuple ? ComponentArray(η) : η
+    cache_use = cache === nothing ?
+                build_ll_cache(dm; ode_args = ode_args, ode_kwargs = ode_kwargs,
+        serialization = serialization) : cache
     n = length(dm.individuals)
     if serialization isa SciMLBase.EnsembleThreads
         nthreads = Threads.maxthreadid()
-        caches = if cache isa Vector
-            length(cache) < nthreads &&
-                throw(ArgumentError("Threaded loglikelihood requires at least $(nthreads) cache entries, got $(length(cache))."))
-            cache
-        elseif cache isa _LLCache
+        caches = if cache_use isa Vector
+            length(cache_use) < nthreads &&
+                throw(ArgumentError("Threaded loglikelihood requires at least $(nthreads) cache entries, got $(length(cache_use))."))
+            cache_use
+        elseif cache_use isa _LLCache
             build_ll_cache(
                 dm; ode_args = ode_args, ode_kwargs = ode_kwargs, nthreads = nthreads)
         else
@@ -2504,8 +2507,8 @@ function loglikelihood(dm::DataModel, θ::ComponentArray, η;
                 dm; ode_args = ode_args, ode_kwargs = ode_kwargs, nthreads = nthreads)
             built isa Vector ? built : [built]
         end
-        η_eltype = η isa Vector ? (isempty(η) ? Float64 : eltype(first(η))) : eltype(η)
-        T = promote_type(eltype(θ), η_eltype)
+        η_eltype = ηs isa Vector ? (isempty(ηs) ? Float64 : eltype(first(ηs))) : eltype(ηs)
+        T = promote_type(eltype(θs), η_eltype)
         by_individual = Vector{T}(undef, n)
         bad = Threads.Atomic{Bool}(false)
         # Chunk-indexed cache assignment: each task owns cache slot `c` for its whole
@@ -2517,8 +2520,8 @@ function loglikelihood(dm::DataModel, θ::ComponentArray, η;
             cache_c = caches[c]
             for i in c:n_chunks:n
                 bad[] && break
-                η_ind = η isa Vector ? η[i] : η
-                lli = _loglikelihood_individual(dm, i, θ, η_ind, cache_c)
+                η_ind = ηs isa Vector ? ηs[i] : ηs
+                lli = _loglikelihood_individual(dm, i, θs, η_ind, cache_c)
                 if !isfinite(lli)
                     bad[] = true
                 else
@@ -2533,10 +2536,10 @@ function loglikelihood(dm::DataModel, θ::ComponentArray, η;
         end
         return ll
     else
-        ll = zero(eltype(θ))
+        ll = zero(eltype(θs))
         for i in 1:n
-            η_ind = η isa Vector ? η[i] : η
-            lli = _loglikelihood_individual(dm, i, θ, η_ind, cache)
+            η_ind = ηs isa Vector ? ηs[i] : ηs
+            lli = _loglikelihood_individual(dm, i, θs, η_ind, cache_use)
             !isfinite(lli) && return -Inf
             ll += lli
         end

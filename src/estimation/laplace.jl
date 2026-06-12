@@ -328,6 +328,16 @@ struct _LaplaceGradCache{T, L, G, V}
     last_valid::V
 end
 
+# Typed key→config stores for the per-batch ForwardDiff config caches. Iterating
+# the old `Vector{Any}` of `(key, cfg)` pairs boxed every key on retrieval
+# (measured ~270 B / 180 ns per warm hit, with several hits per
+# `_laplace_grad_batch` call). With concretely-typed keys the scan is
+# allocation-free; the config itself stays `Any` because its concrete type
+# depends on the runtime chunk size — its single dynamic use site is the
+# ForwardDiff entry call, which is the specializing barrier anyway.
+const _FDCfgStore = Vector{Tuple{Tuple{DataType, DataType, Int}, Any}}
+const _FDHessCfgStore = Vector{Tuple{Tuple{DataType, DataType}, Any}}
+
 mutable struct _LaplaceGradBuffers{T}
     grad_logf::Vector{T}
     Gθ::Matrix{T}
@@ -338,13 +348,13 @@ mutable struct _LaplaceGradBuffers{T}
     nθ::Int
     nb::Int
     gradb_tmp::Vector{T}
-    grad_logf_cfg::Vector{Any}
-    Gθ_cfg::Vector{Any}
-    gθ_grad_cfg::Vector{Any}
-    logdet_θ_cfg::Vector{Any}
-    logdet_b_cfg::Vector{Any}
-    Jθ_cfg::Vector{Any}
-    Jb_cfg::Vector{Any}
+    grad_logf_cfg::_FDCfgStore
+    Gθ_cfg::_FDCfgStore
+    gθ_grad_cfg::_FDCfgStore
+    logdet_θ_cfg::_FDCfgStore
+    logdet_b_cfg::_FDCfgStore
+    Jθ_cfg::_FDCfgStore
+    Jb_cfg::_FDCfgStore
 end
 
 struct _LaplaceHessCache{T, L, H, C, V}
@@ -395,7 +405,7 @@ function _init_laplace_ad_cache(n::Int)
     return LaplaceADCache(grad_cfg, hess_cfg, optf, buffers)
 end
 
-function _get_fd_cfg!(store::Vector{Any}, f, x, builder::Function)
+function _get_fd_cfg!(store::_FDCfgStore, f, x, builder::Function)
     key = (typeof(f), eltype(x), length(x))
     cfg = nothing
     if isempty(store)
@@ -459,14 +469,17 @@ function _get_grad_buffers!(
         gradb_tmp = Vector{T}(undef, nb)
         entry = _LaplaceGradBuffers(grad_logf, Gθ, grad_logdet_θ, grad_logdet_b, Jθ, Jb,
             nθ, nb, gradb_tmp,
-            Any[], Any[], Any[], Any[], Any[], Any[], Any[])
+            _FDCfgStore(), _FDCfgStore(), _FDCfgStore(), _FDCfgStore(),
+            _FDCfgStore(), _FDCfgStore(), _FDCfgStore())
         ad_cache.buffers[bi] = entry
     elseif use_trace && (size(entry.Jθ, 1) == 0 || size(entry.Jb, 1) == 0)
         ntri = _ntri(nb)
         entry.Jθ = Matrix{T}(undef, ntri, nθ)
         entry.Jb = Matrix{T}(undef, ntri, nb)
     end
-    return entry
+    # The slot is an untyped `Vector{Any}` element — assert the concrete buffer
+    # type here so every downstream field access dispatches statically.
+    return entry::_LaplaceGradBuffers{T}
 end
 
 function _init_laplace_hess_cache(T::Type, n::Int)
@@ -842,10 +855,10 @@ end
     logf = f(b)
     entry = cache.ad_cache.grad_cfg[bi]
     if entry === nothing
-        entry = Any[]
+        entry = _FDCfgStore()
         cache.ad_cache.grad_cfg[bi] = entry
     end
-    entry = entry::Vector{Any}
+    entry = entry::_FDCfgStore
     cfg = _get_fd_cfg!(entry, f, b, () -> ForwardDiff.GradientConfig(f, b))
     gradb = grad_cache.last_gradb[bi]
     if length(gradb) != length(b)
@@ -1442,10 +1455,10 @@ function _newton_inner_solve(dm::DataModel,
     isfinite(fval) || return _NewtonSol(b, -Inf, Inf, false)
     entry = ad_cache.grad_cfg[bi]
     if entry === nothing
-        entry = Any[]
+        entry = _FDCfgStore()
         ad_cache.grad_cfg[bi] = entry
     end
-    cfg = _get_fd_cfg!(entry::Vector{Any}, f, b, () -> ForwardDiff.GradientConfig(f, b))
+    cfg = _get_fd_cfg!(entry::_FDCfgStore, f, b, () -> ForwardDiff.GradientConfig(f, b))
     g = Vector{Float64}(undef, nb)
     ForwardDiff.gradient!(g, f, b, cfg)
     b_try = similar(b)
@@ -1901,9 +1914,9 @@ function _laplace_hessian_b(dm::DataModel,
         ftype = typeof(f)
         if entry === nothing
             cfg = ForwardDiff.HessianConfig(f, b)
-            ad_cache.hess_cfg[bi] = Any[((ftype, eltype(b)), cfg)]
+            ad_cache.hess_cfg[bi] = _FDHessCfgStore([((ftype, eltype(b)), cfg)])
         else
-            entry = entry::Vector{Any}
+            entry = entry::_FDHessCfgStore
             found = false
             for (k, c) in entry
                 if k == (ftype, eltype(b))
@@ -2102,7 +2115,8 @@ function _laplace_grad_batch(dm::DataModel,
         Matrix{eltype(θ_vec)}(undef, 0, 0),
         nθ, nb,
         Vector{eltype(θ_vec)}(undef, nb),
-        Any[], Any[], Any[], Any[], Any[], Any[], Any[]) :
+        _FDCfgStore(), _FDCfgStore(), _FDCfgStore(), _FDCfgStore(),
+        _FDCfgStore(), _FDCfgStore(), _FDCfgStore()) :
           _get_grad_buffers!(ad_cache, bi, eltype(θ_vec), nθ, nb, use_trace_logdet_grad)
     # envelope term
     logf_θ = _LaplaceLogfTheta(dm, batch_info, b, const_cache, cache)

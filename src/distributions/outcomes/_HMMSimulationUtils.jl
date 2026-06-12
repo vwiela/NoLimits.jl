@@ -72,8 +72,15 @@ end
     )
 end
 
+# The `_hmm_with_initial_probs` rebuilds run once per row inside the forward
+# filter. They use the positional inner constructors (field types preserved):
+# the outer validating constructors re-checked already-consistent sizes on
+# every row and, with abstractly-typed signatures, returned abstractly-typed
+# distributions — a runtime dispatch per row. Positional field-for-field
+# rebuilds are also the Enzyme-friendly construction pattern.
 @inline function _hmm_with_initial_probs(dist::DiscreteTimeDiscreteStatesHMM, probs)
     return DiscreteTimeDiscreteStatesHMM(
+        dist.n_states,
         dist.transition_matrix,
         dist.emission_dists,
         _hmm_probs_to_categorical(probs)
@@ -82,15 +89,19 @@ end
 
 @inline function _hmm_with_initial_probs(dist::ContinuousTimeDiscreteStatesHMM, probs)
     return ContinuousTimeDiscreteStatesHMM(
+        dist.n_states,
         dist.transition_matrix,
         dist.emission_dists,
         _hmm_probs_to_categorical(probs),
-        dist.Δt
+        dist.Δt,
+        dist.propagation_mode
     )
 end
 
 @inline function _hmm_with_initial_probs(dist::MVDiscreteTimeDiscreteStatesHMM, probs)
     return MVDiscreteTimeDiscreteStatesHMM(
+        dist.n_states,
+        dist.n_outcomes,
         dist.transition_matrix,
         dist.emission_dists,
         _hmm_probs_to_categorical(probs)
@@ -99,10 +110,13 @@ end
 
 @inline function _hmm_with_initial_probs(dist::MVContinuousTimeDiscreteStatesHMM, probs)
     return MVContinuousTimeDiscreteStatesHMM(
+        dist.n_states,
+        dist.n_outcomes,
         dist.transition_matrix,
         dist.emission_dists,
         _hmm_probs_to_categorical(probs),
-        dist.Δt
+        dist.Δt,
+        dist.propagation_mode
     )
 end
 
@@ -117,6 +131,7 @@ end
 
 @inline function _hmm_with_initial_probs(dist::DiscreteTimeObservedStatesMarkovModel, probs)
     return DiscreteTimeObservedStatesMarkovModel(
+        dist.n_states,
         dist.transition_matrix,
         _hmm_probs_to_categorical(probs),
         dist.state_labels
@@ -137,11 +152,12 @@ end
 @inline function _hmm_with_initial_probs(
         dist::ContinuousTimeObservedStatesMarkovModel, probs)
     return ContinuousTimeObservedStatesMarkovModel(
+        dist.n_states,
         dist.transition_matrix,
         _hmm_probs_to_categorical(probs),
         dist.Δt,
-        dist.state_labels;
-        propagation_mode = dist.propagation_mode
+        dist.state_labels,
+        dist.propagation_mode
     )
 end
 

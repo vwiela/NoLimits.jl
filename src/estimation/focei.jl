@@ -174,7 +174,9 @@ end
 # triangle).
 _focei_is_supported(::MvNormal) = true
 function _focei_params(d::MvNormal)
-    return vcat(collect(mean(d)), _vech(Matrix(cov(d))))
+    # `cov` already materialises a dense matrix and `_vech` only reads it — a
+    # converting `Matrix(...)` copy here doubled the allocation per observation.
+    return vcat(collect(mean(d)), _vech(cov(d)))
 end
 function _focei_paramcount(d::MvNormal)
     k = length(d)
@@ -203,6 +205,10 @@ function _focei_expected_information(d::MvNormal)
     # This replaces the previous per-call basis-matrix construction + nv² matrix
     # triple products (measured 18.7 KB / 3.2 μs per call at k=3, invoked once per
     # observation inside the Hessian assembly).
+    # `Matrix(...)` is load-bearing: `cov(::MvNormal)` returns the AbstractPDMat
+    # itself, and `inv(::PDMat)` is a Cholesky-based inverse — a different
+    # algorithm (ulp-level different values) from the dense-LU `inv(::Matrix)`
+    # this closed form was verified against.
     Σ = Matrix(cov(d))
     P = inv(Σ)
     k = size(Σ, 1)
@@ -498,35 +504,51 @@ function _focei_data_term(J, dists_b::Vector, dists_m, interaction::Bool, T::Typ
     # Non-diagonal fallback (Gamma/Beta/MvNormal, or FOCE-frozen dispersion):
     # accumulate Σⱼ Jⱼᵀ ℐⱼ Jⱼ into one preallocated buffer via 5-arg mul! over views —
     # no per-observation slice copies, no `push!`-and-`sum` of matrix temporaries.
+    # The per-observation work lives in `_focei_data_term_obs!` so that mixed-family
+    # batches (whose `dists_b` is abstractly typed) pay one runtime dispatch per
+    # observation instead of one per field access / information call / matmul.
     H = zeros(T, nb, nb)
+    tmp = Matrix{T}(undef, size(J, 1), nb)
     offset = 0
     for (j, d) in enumerate(dists_b)
-        dj = _focei_paramcount(d)
-        Jj = view(J, (offset + 1):(offset + dj), :)
-        offset += dj
-        disp = _focei_dispersion_indices(d)
-        Ij = if !interaction && !isempty(disp)
-            # FOCE: dispersion parameters frozen at the prior mean; their η-sensitivity
-            # is dropped.  ℐ of the supported location-scale families depends only on the
-            # dispersion parameters, so evaluating ℐ at the prior-mean distribution gives
-            # the correct (location-independent) weight.  Zeroing the dispersion rows AND
-            # columns of ℐ is algebraically identical to the historical row-masking of Jⱼ
-            # ((M J)ᵀ ℐ (M J) = Jᵀ (M ℐ M) J with an exact 0/1 diagonal mask).
-            Im = Matrix{T}(_focei_expected_information(dists_m[j]))
-            for r in disp
-                for c in 1:dj
-                    Im[r, c] = zero(T)
-                    Im[c, r] = zero(T)
-                end
-            end
-            Im
-        else
-            _focei_expected_information(d)
-        end
-        tmp = Ij * Jj
-        mul!(H, transpose(Jj), tmp, true, true)
+        dmj = dists_m === nothing ? nothing : dists_m[j]
+        offset = _focei_data_term_obs!(H, tmp, J, offset, d, dmj, interaction)
     end
     return H
+end
+
+# Containers cross the dynamic boundary as concrete Matrix/Int arguments — views
+# are built inside, where every type is known (boxing a SubArray through dynamic
+# dispatch costs more than the dispatch itself).
+function _focei_data_term_obs!(
+        H::Matrix, tmp::Matrix, J::Matrix, offset::Int, d, dmj, interaction::Bool)
+    dj = _focei_paramcount(d)
+    Jj = view(J, (offset + 1):(offset + dj), :)
+    Tj = view(tmp, 1:dj, :)
+    disp = _focei_dispersion_indices(d)
+    if !interaction && !isempty(disp) && dmj !== nothing
+        # FOCE: dispersion parameters frozen at the prior mean; their η-sensitivity
+        # is dropped.  ℐ of the supported location-scale families depends only on the
+        # dispersion parameters, so evaluating ℐ at the prior-mean distribution gives
+        # the correct (location-independent) weight.  Zeroing the dispersion rows AND
+        # columns of ℐ is algebraically identical to the historical row-masking of Jⱼ
+        # ((M J)ᵀ ℐ (M J) = Jᵀ (M ℐ M) J with an exact 0/1 diagonal mask).
+        # Every registered `_focei_expected_information` returns a fresh matrix, so
+        # the dispersion mask is applied in place — no converting copy.
+        Im = _focei_expected_information(dmj)
+        z = zero(eltype(Im))
+        for r in disp
+            for c in 1:dj
+                Im[r, c] = z
+                Im[c, r] = z
+            end
+        end
+        mul!(Tj, Im, Jj)
+    else
+        mul!(Tj, _focei_expected_information(d), Jj)
+    end
+    mul!(H, transpose(Jj), Tj, true, true)
+    return offset + dj
 end
 
 # Robustness wrapper (mirrors `_laplace_logf_batch`): an ODE solve or distribution

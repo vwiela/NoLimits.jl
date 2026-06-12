@@ -352,10 +352,15 @@ Returns a vector of probabilities `p` where `p[s]` is `P(State = s | Y = y)`.
 Uses Bayes' rule: `P(S | Y) ∝ P(Y | S) * P(S)`
 """
 function posterior_hidden_states(hmm::ContinuousTimeDiscreteStatesHMM, y::Real)
+    # Per-state weighting/normalisation fused into tuples (bit-identical op
+    # order); the matrix-exponential propagation inside
+    # `probabilities_hidden_states` remains the dominant cost.
     p_hidden = probabilities_hidden_states(hmm)
-    p_obs_given_state = pdf.(hmm.emission_dists, Ref(y))
-    unnormalized = p_hidden .* p_obs_given_state
-    return unnormalized ./ sum(unnormalized)
+    dists = hmm.emission_dists
+    pt = _hmm_probs_tuple(p_hidden, dists)
+    u = map((pi, d) -> pi * pdf(d, y), pt, dists)
+    su = sum(u)
+    return [ui / su for ui in u]
 end
 
 function Distributions.pdf(hmm::ContinuousTimeDiscreteStatesHMM, y::Real)
@@ -365,9 +370,12 @@ function Distributions.pdf(hmm::ContinuousTimeDiscreteStatesHMM, y::Real)
 end
 
 function Distributions.logpdf(hmm::ContinuousTimeDiscreteStatesHMM, y::Real)
-    log_p_hidden = log.(probabilities_hidden_states(hmm))
-    log_p_obs = logpdf.(hmm.emission_dists, Ref(y))
-    return _hmm_logsumexp(log_p_hidden .+ log_p_obs)
+    # Tuple-fused per-state terms (see posterior_hidden_states) — bit-identical.
+    p_hidden = probabilities_hidden_states(hmm)
+    dists = hmm.emission_dists
+    pt = _hmm_probs_tuple(p_hidden, dists)
+    xs = map((pi, d) -> log(pi) + logpdf(d, y), pt, dists)
+    return _hmm_logsumexp(xs)
 end
 
 function Distributions.rand(rng::AbstractRNG, hmm::ContinuousTimeDiscreteStatesHMM)

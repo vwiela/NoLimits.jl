@@ -94,10 +94,17 @@ Posterior probabilities of hidden states given the length-M observation vector
 `y` (which may contain `missing` entries). Uses all non-missing outcomes jointly.
 """
 function posterior_hidden_states(hmm::MVDiscreteTimeDiscreteStatesHMM, y::AbstractVector)
-    p_hidden = probabilities_hidden_states(hmm)
-    p_obs = [exp(_mv_emission_logpdf(hmm.emission_dists[k], y)) for k in 1:(hmm.n_states)]
-    unnorm = p_hidden .* p_obs
-    return unnorm ./ sum(unnorm)
+    # Tuple-fused twin of the former vector pipeline (same op order — values are
+    # bit-identical). `map` over the emission tuple also replaces the runtime
+    # `emission_dists[k]` indexing, which dispatched dynamically whenever the
+    # per-state emissions have heterogeneous types.
+    p = transpose(hmm.transition_matrix) * hmm.initial_dist.p
+    s = sum(p)
+    dists = hmm.emission_dists
+    pt = _hmm_probs_tuple(p, dists)
+    u = map((pi, d) -> (pi / s) * exp(_mv_emission_logpdf(d, y)), pt, dists)
+    su = sum(u)
+    return [ui / su for ui in u]
 end
 
 # ---------------------------------------------------------------------------
@@ -105,9 +112,13 @@ end
 # ---------------------------------------------------------------------------
 
 function Distributions.logpdf(hmm::MVDiscreteTimeDiscreteStatesHMM, y::AbstractVector)
-    log_p = log.(probabilities_hidden_states(hmm))
-    log_l = [_mv_emission_logpdf(hmm.emission_dists[k], y) for k in 1:(hmm.n_states)]
-    return _hmm_logsumexp(log_p .+ log_l)
+    # Tuple-fused per-state terms (see posterior_hidden_states) — bit-identical.
+    p = transpose(hmm.transition_matrix) * hmm.initial_dist.p
+    s = sum(p)
+    dists = hmm.emission_dists
+    pt = _hmm_probs_tuple(p, dists)
+    xs = map((pi, d) -> log(pi / s) + _mv_emission_logpdf(d, y), pt, dists)
+    return _hmm_logsumexp(xs)
 end
 
 function Distributions.pdf(hmm::MVDiscreteTimeDiscreteStatesHMM, y::AbstractVector)
