@@ -25,7 +25,7 @@ Used as an observation distribution in `@formulas` blocks.
 # Missing data
 When the observation is `missing`, the predicted state distribution (after one transition step)
 is propagated forward without a likelihood contribution — identical to the HMM missing-data
-behaviour.
+behavior.
 """
 struct DiscreteTimeObservedStatesMarkovModel{
     M <: AbstractMatrix{<:Real},
@@ -130,7 +130,7 @@ Distributions.pdf(dist::DiscreteTimeObservedStatesMarkovModel, y) = exp(logpdf(d
 # and `pdf(::UnivariateDistribution, ::Real)`. Real scalars and 1-d vectors
 # already dispatch to the methods above; these forward the remaining array
 # shapes to the untyped handler (via `invoke`, to avoid self-recursion) so
-# behaviour is identical — the observation pipeline never constructs them.
+# behavior is identical — the observation pipeline never constructs them.
 function Distributions.logpdf(dist::DiscreteTimeObservedStatesMarkovModel,
         y::AbstractArray{<:Real, 0})
     invoke(

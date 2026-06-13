@@ -25,7 +25,7 @@ using SpecialFunctions: trigamma
 #                    formula evaluation (and the ODE solve, if any),
 #   * ℐ(φ)          is the closed-form Fisher information of the outcome family
 #                    (the "expected information"), evaluated in Distributions.jl's
-#                    native parameterisation, and
+#                    native parameterization, and
 #   * −∇²_η log π   is the exact curvature of the random-effects prior (= Ω⁻¹ for
 #                    Normal/MvNormal random effects).
 #
@@ -35,7 +35,7 @@ using SpecialFunctions: trigamma
 # Hessian from second-order to first-order AD.
 #
 # FOCE (no interaction) freezes the dispersion-type parameters at the random-effects
-# prior mean mᵢ = mean(πᵢ) (= 0 for centred Normal random effects, the classical case)
+# prior mean mᵢ = mean(πᵢ) (= 0 for centered Normal random effects, the classical case)
 # and drops their η-sensitivity, while the location/structural parameters and their
 # Jacobian stay at the conditional mode η̂.
 # =====================================================================================
@@ -50,7 +50,7 @@ using SpecialFunctions: trigamma
 #   _focei_is_supported(d)          -> Bool
 #
 # The Jacobian carries every link / transform / ODE dependence, so ℐ is stored purely in
-# the native parameterisation.  Distributions without a registered ℐ are rejected up
+# the native parameterization.  Distributions without a registered ℐ are rejected up
 # front (no numeric fallback by design).
 # -------------------------------------------------------------------------------------
 
@@ -388,8 +388,8 @@ end
 # -------------------------------------------------------------------------------------
 
 # Robustness wrapper: distribution construction can throw on a numerically
-# degenerate θ the outer optimiser steps into (e.g. a singular Ω) — fall back to
-# the zero vector so the subsequent evaluations return -Inf and the optimiser
+# degenerate θ the outer optimizer steps into (e.g. a singular Ω) — fall back to
+# the zero vector so the subsequent evaluations return -Inf and the optimizer
 # backtracks instead of crashing the fit (mirrors `_laplace_logf_batch`).
 function _focei_prior_mean_b(
         dm::DataModel, batch_info::_LaplaceBatchInfo, θ_re::ComponentArray,
@@ -551,10 +551,10 @@ function _focei_data_term_obs!(
 end
 
 # Robustness wrapper (mirrors `_laplace_logf_batch`): an ODE solve or distribution
-# construction that throws on an unstable parameter region the optimiser steps into
+# construction that throws on an unstable parameter region the optimizer steps into
 # (e.g. a negative state driving a fractional power, or a negative scale) is turned into
 # a NaN Hessian. That makes the Cholesky/log-det fail and the marginal -Inf, so the outer
-# optimiser backtracks instead of crashing the whole fit — matching Laplace's behaviour.
+# optimizer backtracks instead of crashing the whole fit — matching Laplace's behavior.
 function _focei_negH_batch(dm::DataModel, batch_info::_LaplaceBatchInfo, θ, b,
         const_cache::LaplaceConstantsCache, cache::_LLCache;
         interaction::Bool, tctx = nothing)
@@ -588,7 +588,7 @@ function _focei_negH_batch_impl(dm::DataModel, batch_info::_LaplaceBatchInfo, θ
         J = ForwardDiff.jacobian(Φ, b)
         # Guard against an ODE solve that succeeds at the base point but reports failure
         # under the AD seed (length mismatch): signal a non-finite Hessian so the marginal
-        # becomes -Inf and the outer optimiser backtracks out of the unstable region.
+        # becomes -Inf and the outer optimizer backtracks out of the unstable region.
         D_expected = sum(_focei_paramcount, dists_b; init = 0)
         size(J, 1) == D_expected || return fill(convert(T, NaN), nb, nb)
         dists_m = nothing
@@ -615,7 +615,7 @@ end
 # -------------------------------------------------------------------------------------
 # 5. Hessian-builder plug-in for the shared Laplace objective/gradient machinery.
 #
-# FOCEI reuses Laplace's optimised marginal objective and trace-estimator gradient
+# FOCEI reuses Laplace's optimized marginal objective and trace-estimator gradient
 # (config/buffer caching, the implicit db*/dθ term, batching, threading) verbatim,
 # swapping only the inner Hessian via `_build_hess_b`.  The builder returns H = ∇²_b log f
 # so that the downstream `negH = -H`; FOCEI's negH IS 𝓗 = Σ Jᵀ ℐ(φ) J − ∇²log π, hence it

@@ -1,24 +1,17 @@
 # Mixed-Effects Tutorial 5: Modeling Seizure Counts with Poisson and Negative Binomial Outcomes
 
-Counting events over time - seizures, infections, adverse reactions - is one of the most common tasks in longitudinal clinical research. Yet count data behave very differently from continuous measurements. Counts are non-negative integers, their variance typically grows with their mean, and they are often right-skewed. Applying a Normal likelihood to such data can produce negative predicted counts, biased standard errors, and misleading inferences. The Poisson and Negative Binomial distributions are the natural statistical models for these outcomes because they respect the discrete, non-negative nature of counts and link the variance directly to the mean.
-
-In this tutorial, you will build and compare two nonlinear mixed-effects models for repeated seizure counts, using data from the Thall and Vail (1990) epilepsy trial. This trial is one of the most widely analyzed longitudinal count datasets in biostatistics: 59 epilepsy patients were randomized to either progabide or placebo, and seizure counts were recorded across four consecutive two-week periods following a baseline observation window. The dataset has become a benchmark for count regression methods because it exhibits substantial between-subject variability and overdispersion - features that push simple Poisson models to their limits and motivate the Negative Binomial alternative.
-
-Both models share the same fixed-effects covariates and subject-level random-effects structure; they differ only in the outcome distribution. The Poisson assumes the variance equals the mean, while the Negative Binomial introduces a dispersion parameter to accommodate extra-Poisson variation. Because the subject-specific random effect enters inside an exponential rate function, both models are nonlinear in the random effects. This nonlinearity means the marginal likelihood integral over random effects has no closed-form solution, making Monte Carlo Expectation-Maximization (MCEM) a natural estimation strategy.
+Count outcomes — seizures, infections, adverse events — are non-negative integers whose variance grows with the mean, so a Normal likelihood can predict negative counts and biased errors. The Poisson and Negative Binomial distributions respect this structure. This tutorial fits and compares both as nonlinear mixed-effects models on the Thall and Vail (1990) epilepsy trial (59 patients, progabide vs placebo, four two-week periods). The two share the same predictor and random intercept and differ only in the outcome: Poisson fixes the variance to the mean, while Negative Binomial adds a dispersion parameter for overdispersion. The random effect enters through an exponential rate, so both are nonlinear in the random effects — a natural fit for Monte Carlo Expectation-Maximization (MCEM).
 
 ## Learning Goals
 
-By the end of this tutorial, you will be able to:
-
-- **Prepare longitudinal count data** - reshape the classic MASS `epil` dataset into the long format NoLimits expects, deriving subject-level covariates (baseline seizure rate, age, treatment) and time-varying design variables (period, treatment-by-period interaction).
-- **Specify count regression models** - define both a Poisson and a Negative Binomial mixed-effects model in NoLimits, each with a log-link linear predictor and a subject-level random intercept.
-- **Estimate with MCEM** - fit both models using Monte Carlo Expectation-Maximization, an algorithm that alternates between sampling random effects from their conditional distribution and optimizing the fixed-effects parameters.
-- **Visualize model fit** - generate fitted-trajectory plots and observation-level predictive distributions using `plot_fits` and `plot_observation_distributions`.
-- **Quantify uncertainty** - compute Wald-based confidence intervals with `compute_uq` and produce publication-ready summary tables with `NoLimits.summarize`.
+- Reshape the MASS `epil` dataset into NoLimits' long format with subject- and time-level covariates.
+- Specify Poisson and Negative Binomial mixed-effects models with a log-link and random intercept.
+- Fit both with MCEM.
+- Diagnose with fit and observation-distribution plots, and quantify uncertainty with Wald intervals.
 
 ## Step 1: Data Setup
 
-In this step, you will load the MASS epilepsy dataset (`MASS::epil`, mirrored in Rdatasets) and reshape it into the long format that NoLimits expects, where each row represents one subject-period combination. Along the way, you will derive several analysis variables: a binary treatment indicator, log-transformed baseline seizure count and age (to stabilize the scale of the linear predictor), and a centered period variable that improves interpretability of the intercept. The treatment-by-period interaction term will allow you to test whether the treatment effect changes over the course of the trial.
+We load the MASS `epil` dataset (one row per subject-period) and derive the analysis variables: a binary treatment indicator, log baseline count and age (to stabilize the predictor scale), a centered period, and a treatment-by-period interaction.
 
 ```julia
 using NoLimits
@@ -80,9 +73,7 @@ first(df, 10)
 
 ## Step 2: Poisson Mixed-Effects Model
 
-In this step, you will define the Poisson mixed-effects model. The core idea is a log-linear predictor: the log of the expected seizure rate is modeled as a linear combination of covariates plus a subject-level random intercept. The random effect `eta` captures unmeasured between-subject heterogeneity in baseline seizure propensity. Because `eta` appears inside the exponential that maps the log-rate to the Poisson intensity parameter `lambda`, the model is nonlinear in the random effects - a key reason MCEM is preferred over simpler estimation methods such as the Laplace approximation.
-
-Note the two helper functions defined in the `@helpers` block: `linpred` computes the dot product of the covariate vector with the coefficient vector (keeping the model specification clean), and `safe_exp` guards against numerical overflow in the exponential.
+The Poisson model uses a log-linear predictor: the log seizure rate is a linear combination of covariates plus a subject random intercept `eta`, which captures unmeasured heterogeneity in baseline propensity. Because `eta` sits inside the exponential mapping to the rate `lambda`, the model is nonlinear in the random effects. The `@helpers` block defines `linpred` (covariate·coefficient dot product) and `safe_exp` (overflow-guarded exponential).
 
 ```julia
 model_poisson = @Model begin
@@ -181,9 +172,7 @@ Helper functions
 
 ### Build `DataModel` and Configure `MCEM`
 
-Next, you will bind the model to the data by constructing a `DataModel`. This step validates that all required columns are present and correctly typed, groups observations by subject, and prepares the internal data structures for estimation.
-
-You will then configure the MCEM algorithm. The `sample_schedule` controls how many MCMC samples are drawn from the conditional distribution of the random effects at each EM iteration - starting with fewer samples and increasing over iterations improves computational efficiency. The settings here are intentionally compact for documentation purposes; in practice, you would use more iterations and larger sample sizes for production analyses.
+The `DataModel` validates the data and groups observations by subject. MCEM's `sample_schedule` grows the E-step sample count across iterations (see [MCEM](../estimation/mcem.md)); the compact settings here keep runtime short — production runs would use more iterations and larger samples.
 
 ```julia
 dm_poisson = DataModel(model_poisson, df; primary_id=:Subject, time_col=:period_f)
@@ -277,7 +266,7 @@ Per-random-effect summary
 
 ### Fit, Summarize, Plot, and UQ (Poisson)
 
-You are now ready to fit the Poisson model. The `fit_model` call runs the full MCEM loop: at each iteration, it samples random effects conditional on the current fixed-effects estimates, then updates the fixed effects by maximizing the Monte Carlo approximation to the marginal likelihood. After fitting, you will inspect a summary of the estimated parameters.
+Fitting runs the full MCEM loop; the summary shows the estimated parameters:
 
 ```julia
 res_poisson = fit_model(
@@ -325,7 +314,7 @@ Empirical Bayes random effects summary (across RE levels)
   eta                59        0.3579        0.6502        0.0455        0.2804        0.6631
 ```
 
-To assess how well the model captures individual seizure trajectories, you will now plot fitted values against observed data for the first two subjects. The observation-distribution diagnostic reveals the full predictive distribution at selected time points - a particularly informative view for count data, where the shape of the distribution (not just its mean) carries clinical significance.
+Fitted values vs observed data for the first two subjects, plus the predicted distribution at selected points — especially informative for counts, where distribution shape matters, not just the mean.
 
 ```julia
 p_fit_poisson = plot_fits(
@@ -350,7 +339,7 @@ p_fit_poisson
 <!- injected:t5-pfitp ->
 ![Fitted Poisson seizure-rate trajectories for the first two subjects.](figures/t5/p_fit_poisson.png)
 
-Display the observation-distribution plot to examine the predicted probability mass function at individual time points.
+The observation-distribution plot shows the predicted probability mass at individual time points.
 
 ```julia
 p_obs_poisson
@@ -359,7 +348,7 @@ p_obs_poisson
 <!- injected:t5-pobsp ->
 ![Predicted Poisson probability mass at the first two observations of the first subject.](figures/t5/p_obs_poisson.png)
 
-Next, you will compute Wald-based confidence intervals for the fixed-effects parameters. The Wald method uses the curvature of the log-likelihood at the optimum to approximate the sampling distribution of each parameter estimate, yielding standard errors and 95% confidence intervals without requiring additional model fits.
+Wald intervals use the log-likelihood curvature at the optimum to give standard errors and 95% CIs without extra fits (see [Wald UQ](../uncertainty-quantification/wald.md)).
 
 ```julia
 uq_poisson = compute_uq(
@@ -398,7 +387,7 @@ Parameter uncertainty summary
   omega            0.7901        0.4303        0.3728        1.9309
 ```
 
-For a consolidated view, combine the parameter estimates and their uncertainty into a single summary table - the format most convenient for reporting in manuscripts and presentations.
+Combine estimates and uncertainty into one table for reporting:
 
 ```julia
 NoLimits.summarize(res_poisson, uq_poisson)
@@ -440,7 +429,7 @@ Empirical Bayes random effects summary (across RE levels)
   eta                59        0.3579        0.6502        0.0455        0.2804        0.6631
 ```
 
-Finally, visualize the approximate sampling distributions of the fixed-effects parameters implied by the Wald approximation.
+Visualize the Wald sampling distributions of the parameters:
 
 ```julia
 plot_uq_distributions(uq_poisson)
@@ -451,9 +440,9 @@ plot_uq_distributions(uq_poisson)
 
 ## Step 3: Negative Binomial Mixed-Effects Model
 
-The Poisson model assumes that the conditional variance of seizure counts equals the conditional mean. In practice, count data from clinical trials frequently exhibit *overdispersion* - more variability than the Poisson predicts - due to unmeasured heterogeneity beyond what the random intercept alone can capture. The Negative Binomial distribution addresses this limitation by introducing an additional dispersion parameter `r` (sometimes called the "size" or "shape" parameter). As `r` grows large, the Negative Binomial converges to the Poisson; smaller values of `r` indicate greater overdispersion. This makes the Negative Binomial a strict generalization of the Poisson, and comparing the two reveals whether overdispersion is a meaningful feature of the data.
+The Poisson fixes the variance to the mean, but trial counts are often *overdispersed* — more variable than Poisson allows. The Negative Binomial adds a dispersion parameter `r`: large `r` recovers the Poisson, small `r` means strong overdispersion, so comparing the two reveals whether overdispersion matters.
 
-In this step, you will define the Negative Binomial model. It retains the same structural predictor and random-effects hierarchy as the Poisson model above. The only additions are the dispersion parameter `log_r` (estimated on the log scale to ensure positivity) and the formula lines that convert the mean-scale rate `lambda` and size `r` into the `(r, p)` parameterization expected by `Distributions.NegativeBinomial`.
+The model keeps the Poisson predictor and random intercept, adding `log_r` (log scale for positivity) and the lines that convert `lambda` and `r` into the `(r, p)` form `Distributions.NegativeBinomial` expects.
 
 ```julia
 model_nb = @Model begin
@@ -556,7 +545,7 @@ Helper functions
 
 ### Build `DataModel`, Fit, Summarize, Plot, and UQ (Negative Binomial)
 
-You will now follow the same workflow as for the Poisson model: construct the `DataModel`, fit with identical MCEM settings, and inspect the results. Using the same algorithm configuration for both models ensures that any differences in fit quality reflect genuine differences in model adequacy rather than tuning artifacts.
+Same workflow as the Poisson, with identical MCEM settings — so differences reflect model adequacy, not tuning:
 
 ```julia
 dm_nb = DataModel(model_nb, df; primary_id=:Subject, time_col=:period_f)
@@ -608,7 +597,7 @@ Empirical Bayes random effects summary (across RE levels)
   eta                59        0.2344        0.5379       -0.0228        0.2442          0.43
 ```
 
-Generate the same fitted-trajectory and observation-distribution diagnostics as before. Comparing these plots side-by-side with the Poisson versions will reveal whether the Negative Binomial's wider predictive intervals better capture the observed variability in seizure counts.
+The same diagnostics as before; comparing with the Poisson shows whether the Negative Binomial's wider intervals better capture the observed variability.
 
 ```julia
 p_fit_nb = plot_fits(
@@ -633,7 +622,7 @@ p_fit_nb
 <!- injected:t5-pfitnb ->
 ![Fitted Negative Binomial seizure-rate trajectories for the first two subjects.](figures/t5/p_fit_nb.png)
 
-Display the Negative Binomial observation-distribution plot for direct comparison with the Poisson version above. Pay attention to the width of the predicted probability mass - the Negative Binomial should assign more probability to extreme counts.
+Compare the predicted probability mass with the Poisson version — the Negative Binomial should give more weight to extreme counts.
 
 ```julia
 p_obs_nb
@@ -642,7 +631,7 @@ p_obs_nb
 <!- injected:t5-pobsnb ->
 ![Predicted Negative Binomial probability mass at the first two observations of the first subject.](figures/t5/p_obs_nb.png)
 
-Compute Wald-based uncertainty for the Negative Binomial model and produce both standalone and combined summary tables, following the same procedure as for the Poisson fit.
+Wald uncertainty for the Negative Binomial, with standalone and combined tables:
 
 ```julia
 uq_nb = compute_uq(
@@ -694,7 +683,7 @@ Empirical Bayes random effects summary (across RE levels)
   eta                59        0.2344        0.5379       -0.0228        0.2442          0.43
 ```
 
-The uncertainty distribution plots for the Negative Binomial model now include the dispersion parameter `log_r` - a parameter with no counterpart in the Poisson model, whose magnitude directly quantifies the degree of overdispersion in the data.
+These distributions now include `log_r`, whose magnitude quantifies the overdispersion absent from the Poisson.
 
 ```julia
 plot_uq_distributions(uq_nb)
@@ -705,7 +694,7 @@ plot_uq_distributions(uq_nb)
 
 ## Step 4: Comparing Poisson and Negative Binomial Objectives
 
-As a final diagnostic, you will compare the objective function values (negative log-likelihoods) from the two fits. A word of caution: because the Poisson is a limiting case of the Negative Binomial (as `r` tends to infinity) rather than a strict parameter restriction, these values are not directly comparable via a standard likelihood ratio test. Nevertheless, a substantially lower objective for the Negative Binomial strongly suggests that the data exhibit overdispersion the Poisson cannot accommodate. Formal model comparison for this class of count models would require information criteria (AIC, BIC) or cross-validation, which are beyond the scope of this tutorial.
+Comparing the two objectives (negative log-likelihoods) needs care: the Poisson is a limiting case of the Negative Binomial (`r → ∞`), not a strict parameter restriction, so a standard likelihood-ratio test does not apply. Still, a substantially lower Negative Binomial objective points to overdispersion the Poisson cannot capture; formal selection would use information criteria (AIC, BIC) or cross-validation.
 
 ```julia
 (
@@ -719,4 +708,4 @@ As a final diagnostic, you will compare the objective function values (negative 
 (poisson_objective = -676.3985855275587, nb_objective = -645.9052503662361)
 ```
 
-Keep in mind that these two objective values arise from different likelihood families. They provide a useful heuristic comparison, but definitive model selection requires the formal tools mentioned above.
+The two objectives come from different likelihood families — a useful heuristic, but definitive selection needs the formal tools above.

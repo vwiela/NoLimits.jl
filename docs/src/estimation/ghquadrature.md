@@ -40,7 +40,7 @@ Discrete distributions (`Poisson`, `Bernoulli`, etc.) are not supported and rais
 
 As a consequence:
 
-- When the data are highly informative and the posterior mode lies far from the prior mean, the nodes may miss the region of highest likelihood. In that case, the signed logsumexp can become numerically negative (especially at level ≥ 2), signalling poor quadrature accuracy.
+- When the data are highly informative and the posterior mode lies far from the prior mean, the nodes may miss the region of highest likelihood. In that case, the signed logsumexp can become numerically negative (especially at level ≥ 2), signaling poor quadrature accuracy.
 - The method works best when the posterior is roughly centered on the prior - for example, with moderate-information data, well-calibrated priors, or Gaussian random effects where the prior is a reasonable envelope for the posterior.
 - Level 1 in the current (prior-centered) form is **not** equivalent to the Laplace approximation. That equivalence holds only for the adaptive (posterior-centered) variant, which is not yet implemented.
 

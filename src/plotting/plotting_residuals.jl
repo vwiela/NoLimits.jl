@@ -318,7 +318,7 @@ Compute residuals for each observation and return a `DataFrame`.
 - `residuals`: residual metrics to compute. Allowed: `:pit`, `:quantile`, `:raw`,
   `:pearson`, `:logscore`.
 - `fitted_stat = mean`: statistic applied to the predictive distribution for raw residuals.
-- `randomize_discrete::Bool = true`: randomise PIT values for discrete outcomes.
+- `randomize_discrete::Bool = true`: randomize PIT values for discrete outcomes.
 - `cdf_fallback_mc::Int = 0`: MC samples for CDF approximation with non-analytic distributions.
 - `ode_args::Tuple = ()`, `ode_kwargs::NamedTuple = NamedTuple()`: forwarded to ODE solver.
 - `mcmc_draws::Int = 1000`, `mcmc_warmup`: MCMC draw settings.

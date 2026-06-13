@@ -63,7 +63,7 @@ end
 ```
 Inside model blocks the value supports both named-field access (`x.Age`, `x.BMI`) and
 numeric-vector operations in column order (`x' * β`, `dot(x, β)`, `sum(x)`, `x[1]`). The
-vector behaviour requires every column to be numeric; mixed/categorical vectors keep
+vector behavior requires every column to be numeric; mixed/categorical vectors keep
 field access only.
 
 # Keyword Arguments
@@ -86,7 +86,7 @@ end
 ```
 Inside model blocks the per-row value supports both named-field access (`z.z1`, `z.z2`)
 and numeric-vector operations in column order (`z' * β`, `dot(z, β)`, `sum(z)`, `z[1]`).
-The vector behaviour requires every column to be numeric; mixed/categorical vectors keep
+The vector behavior requires every column to be numeric; mixed/categorical vectors keep
 field access only.
 
 # Arguments
@@ -196,7 +196,7 @@ end
     Covariates
 
 Compiled representation of a `@covariates` block. Stores the covariate names
-categorised as constant, varying, or dynamic, along with interpolation types
+categorized as constant, varying, or dynamic, along with interpolation types
 and the raw covariate parameter structs.
 
 Use the `model.covariates.covariates` field (or the `CovariatesBundle`) to inspect

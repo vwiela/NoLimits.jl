@@ -1748,7 +1748,7 @@ Plot predictions from one or more fitted models side-by-side for visual comparis
 
 When called with a single `FitResult` or `MultistartFitResult`, behaves like
 [`plot_fits`](@ref). When called with a collection, overlays predictions from each
-model on the same panel, labelled by vector index, `NamedTuple` key, or `Dict` key.
+model on the same panel, labeled by vector index, `NamedTuple` key, or `Dict` key.
 
 All keyword arguments are forwarded to the underlying `plot_fits` implementation.
 """
@@ -2175,7 +2175,7 @@ end
 Horizontal bar chart of eta shrinkage for all scalar random effects, with a
 vertical reference line at `threshold` (default 30 %).
 
-Bars are coloured by severity: below `threshold` (green), between `threshold`
+Bars are colored by severity: below `threshold` (green), between `threshold`
 and 50 % (orange), above 50 % (red). Shrinkage is computed via
 [`compute_shrinkage`](@ref).
 

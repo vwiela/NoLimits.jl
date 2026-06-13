@@ -1,21 +1,17 @@
 # Fixed-Effects Tutorial 1: Nonlinear Longitudinal Model (MLE + MAP)
 
-Many biological processes - organ growth, tumor progression, enzyme saturation - follow sigmoidal trajectories that cannot be captured by linear regression. Fitting such curves to repeated measurements collected over time is a core task in longitudinal data analysis. In this tutorial, you will build a logistic growth model for tree-trunk circumference data, estimate its parameters with two complementary methods (maximum likelihood and maximum a posteriori), and examine how prior information shapes the result. No random effects are introduced here; a later tutorial extends the same model to account for inter-subject variability.
+Many biological processes — organ growth, tumour progression, enzyme saturation — follow sigmoidal trajectories that linear regression cannot capture. This tutorial builds a logistic growth model for tree-trunk circumference data and estimates its parameters by maximum likelihood (MLE) and maximum a posteriori (MAP), showing how prior information shapes the fit. Random effects are omitted here; a [later tutorial](mixed-effects-multiple-methods.md) adds between-subject variability.
 
 ## What You Will Learn
 
-This tutorial walks through the complete modelling cycle for a fixed-effects nonlinear model in NoLimits.jl. Along the way you will learn how to:
-
-- **Translate a scientific growth equation** into a NoLimits model specification.
-- **Connect that specification to observed data** by constructing a `DataModel`.
-- **Estimate parameters under two philosophies.** Maximum likelihood estimation (MLE) finds the parameter values that make the observed data most probable, treating the likelihood as the sole objective. Maximum a posteriori estimation (MAP) augments the likelihood with prior distributions on the parameters, which can improve numerical stability when some parameters are weakly identified - a common situation with sigmoidal models whose asymptote or inflection point lies outside the observed time window.
-- **Compare and diagnose** the resulting estimates by visualising fitted trajectories and inspecting observation-level distributions.
-
-By the end, you will have a working template that you can adapt to your own nonlinear longitudinal datasets.
+- Translate a growth equation into a NoLimits model specification.
+- Pair it with data in a `DataModel`.
+- Estimate parameters by MLE and MAP, and read the effect of priors.
+- Diagnose the fit with trajectory and observation-distribution plots.
 
 ## Step 1: Load the Data
 
-In this step, you will load the dataset used throughout the tutorial: the classic Orange tree growth study, originally published by Draper and Smith and available in R as `datasets::Orange`. It records the trunk circumference of five orange trees measured at seven time points each, making it a compact but representative example of nonlinear longitudinal data.
+The classic Orange tree growth study (Draper and Smith; R's `datasets::Orange`) records trunk circumference for five trees at seven time points each — a compact, representative example of nonlinear longitudinal data.
 
 ```julia
 using NoLimits
@@ -51,17 +47,15 @@ first(df, 8)
    8 │        8      2    118             33
 ```
 
-Each row records one measurement occasion. The `Tree` column identifies the individual, `age` gives the tree's age in days since planting, and `circumference` is the trunk circumference in millimetres. Because every tree is measured at the same set of ages, this is a balanced design - convenient for illustration, though NoLimits.jl handles unbalanced data equally well.
+Each row is one measurement: `Tree` identifies the individual, `age` is days since planting, and `circumference` is the trunk circumference in millimeters. The design is balanced (every tree shares the same ages), though NoLimits.jl handles unbalanced data equally well.
 
 ## Step 2: Define a Nonlinear Fixed-Effects Model
 
-In this step, you will express the scientific model as a NoLimits model specification. The structural model is a three-parameter logistic growth curve, one of the simplest sigmoidal functions used in biology:
+The structural model is a three-parameter logistic growth curve:
 
 $$\mu(t) = \frac{a}{1 + \exp\!\bigl(-k\,(t - t_0)\bigr)}$$
 
-Here, `a` sets the upper asymptote (the maximum circumference the model can predict), `k` controls the steepness of the growth phase, and `t0` locates the inflection point - the age at which growth is fastest. Observations are assumed normally distributed around this deterministic trajectory with standard deviation `sigma`.
-
-Notice that we also attach prior distributions to each parameter. MLE will ignore these priors entirely, but they become essential for MAP estimation in Step 4. The priors encode only weak domain knowledge: circumferences are positive and on the order of tens to hundreds of millimetres, growth rates are small and positive, and the inflection point falls somewhere within the range of observed ages.
+`a` is the upper asymptote, `k` the growth-phase steepness, and `t0` the inflection point (the age of fastest growth); observations are Normal around this curve with standard deviation `σ`. Each parameter also carries a weakly-informative prior — ignored by MLE, but used by MAP in Step 4.
 
 ```julia
 using NoLimits
@@ -86,11 +80,11 @@ model = @Model begin
 end
 ```
 
-A few points worth noting about this specification. The `@covariates` block declares `age` as a time-varying covariate, which tells NoLimits to look up a column called `age` in the data frame. The residual standard deviation `sigma` is parameterised on the log scale (`scale=:log`), which constrains it to be strictly positive during optimisation without requiring explicit bounds. Finally, the `@formulas` block first computes the deterministic prediction `mu` and then declares that the observed column `circumference` follows a normal distribution centred on that prediction.
+`@covariates` declares `age` as a time-varying covariate (read from the column of the same name). `σ` is parameterized on the log scale (`scale=:log`) to stay positive without explicit bounds. `@formulas` computes the deterministic mean `μ`, then ties the observed `circumference` to it through a Normal.
 
 ### Model Summary
 
-Before fitting, it is good practice to inspect the model structure programmatically. The summary confirms which parameters are declared as fixed effects, which covariates are expected, and what form the observation model takes.
+`summarize` confirms the declared fixed effects, expected covariates, and observation model:
 
 ```julia
 model_summary = NoLimits.summarize(model)
@@ -157,7 +151,7 @@ Helper functions
 
 ## Step 3: Build the DataModel and Configure Estimation
 
-With the model and data in hand, you will now pair them into a `DataModel` - the central object that validates the data against the model specification and prepares the internal structures needed for estimation. In the same step, you will configure the two estimation methods (MLE and MAP), specifying a maximum of 500 optimiser iterations for each.
+A `DataModel` validates the data against the model and prepares the internal structures for estimation. We also configure the two estimators (500 iterations each).
 
 ```julia
 dm = DataModel(model, df; primary_id=:Tree, time_col=:age)
@@ -168,11 +162,11 @@ map_method = NoLimits.MAP(; optim_kwargs=(maxiters=500,))
 serialization = SciMLBase.EnsembleThreads()
 ```
 
-The `primary_id=:Tree` argument tells NoLimits which column identifies individuals, and `time_col=:age` specifies the time axis. Setting `serialization=EnsembleThreads()` enables multi-threaded likelihood evaluation across individuals - a minor convenience here with only five trees, but essential for larger datasets where per-individual computations dominate runtime.
+`primary_id=:Tree` identifies individuals and `time_col=:age` sets the time axis; `EnsembleThreads()` evaluates the per-individual likelihood in parallel — minor here, but valuable on larger datasets.
 
 ### DataModel Summary
 
-It is worth verifying that the data were parsed correctly. The summary should confirm five individuals, seven observations each, no missing values, and no events.
+The summary confirms five individuals, seven observations each, no missing values, and no events.
 
 ```julia
 dm_summary = NoLimits.summarize(dm)
@@ -244,7 +238,7 @@ Covariate descriptive statistics (observation rows)
 
 ## Step 4: Fit with MLE and MAP
 
-You are now ready to estimate the model parameters under both methods. Each call to `fit_model` runs a gradient-based optimiser (L-BFGS by default), starting from the initial values declared in the `@fixedEffects` block. The key difference lies in the objective function: MLE maximises the log-likelihood alone, while MAP maximises the log-likelihood plus the log-prior.
+Each `fit_model` call runs the default L-BFGS optimizer from the declared initial values. MLE and MAP differ only in the objective: MLE uses the log-likelihood, MAP adds the log-prior, which can stabilize weakly identified parameters (see [MLE / MAP](../estimation/mle.md)).
 
 ```julia
 res_mle = fit_model(dm, mle_method; serialization=serialization, rng=Random.Xoshiro(41))
@@ -261,9 +255,9 @@ res_map = fit_model(dm, map_method; serialization=serialization, rng=Random.Xosh
 (objective_mle = 158.39871272191726, objective_map = 168.53669404545343)
 ```
 
-The returned objective values are negative log-likelihoods (for MLE) or negative log-posteriors (for MAP), so lower values indicate a better fit. Because the MAP objective includes additional prior penalty terms, its numerical value is not directly comparable to the MLE objective; what matters at this stage is that each method converged successfully.
+These objectives are negative log-likelihood (MLE) and negative log-posterior (MAP); the extra prior terms make the MAP value not directly comparable to MLE's.
 
-To verify convergence and examine standard errors, you can request a detailed fit summary. This reports convergence status, the final objective value, and standard errors for all parameters whose `calculate_se` flag was set to `true`.
+The fit summary reports convergence, the final objective, and standard errors for every parameter with `calculate_se=true`:
 
 ```julia
 fit_summary_mle = NoLimits.summarize(res_mle)
@@ -301,7 +295,7 @@ Outcome data coverage
 
 ## Step 5: Compare Parameter Estimates
 
-With both fits complete, you can now extract the estimated parameters on the original (untransformed) scale and compare them side by side.
+Extract the estimates on the natural (untransformed) scale and compare them side by side:
 
 ```julia
 θ_mle = NoLimits.get_params(res_mle; scale=:untransformed)
@@ -318,11 +312,11 @@ With both fits complete, you can now extract the estimated parameters on the ori
 (mle = (a = 192.68759193577552, k = 0.002828584934064404, t0 = 728.7563832627657, σ = 22.34804785876128), map = (a = 191.8757304534822, k = 0.0028588792012859006, t0 = 724.0263172113838, σ = 22.184112443700283))
 ```
 
-Because this dataset is relatively small (35 observations total), the priors exert a noticeable pull on the MAP estimates. In particular, parameters whose likelihood surface is flat - such as the asymptote `a`, which is only weakly constrained when few trees have approached their maximum size - will be drawn toward the prior mean under MAP but left at the pure likelihood optimum under MLE. As sample size grows, the likelihood dominates and the two methods converge to the same values. This behaviour serves as a useful diagnostic: large MLE-MAP discrepancies flag parameters that the data alone cannot pin down precisely.
+With only 35 observations the priors pull the MAP estimates noticeably, most so for weakly-constrained parameters like the asymptote `a` (few trees have neared their maximum size): MLE leaves it at the pure likelihood optimum, MAP shrinks it toward the prior mean. The gap closes as data accumulate, so a large MLE–MAP discrepancy flags a parameter the data alone cannot pin down.
 
 ## Step 6: Fitted Trajectories
 
-Plotting model predictions against raw observations is the most direct way to assess goodness of fit. In this step, you will overlay the estimated logistic curves on the data for the first two trees under each estimation method.
+Overlaying predictions on the raw data is the most direct goodness-of-fit check ([plotting reference](../plotting/index.md)). Here are the fitted curves for the first two trees under each method.
 
 ```julia
 inds = [1, 2]
@@ -355,7 +349,7 @@ p_fit_mle
 <!- injected:fe1-pfitmle ->
 ![Fitted population logistic trajectories under MLE for the first two trees.](figures/fe1/p_fit_mle.png)
 
-Because there are no random effects in this model, every tree is predicted by the same population-level curve. Deviations between the curve and individual data points therefore reflect both measurement noise and genuine between-tree variability that the current model does not capture. If these residual patterns appear systematic - for example, if one tree consistently lies above the curve while another lies below - that is a strong signal that random effects should be introduced (see the mixed-effects tutorials).
+With no random effects, every tree shares the same population curve, so deviations mix measurement noise with uncaptured between-tree variability. Systematic patterns — one tree consistently above the curve, another below — signal that random effects are needed (see the [mixed-effects tutorials](mixed-effects-multiple-methods.md)).
 
 MAP fit plot:
 
@@ -366,11 +360,11 @@ p_fit_map
 <!- injected:fe1-pfitmap ->
 ![Fitted population logistic trajectories under MAP for the first two trees.](figures/fe1/p_fit_map.png)
 
-The MAP trajectories may appear nearly identical to the MLE trajectories or show subtle shifts, depending on how informative the priors are relative to the data. Comparing the two plots is a quick visual assessment of prior influence.
+How far the MAP trajectories shift from the MLE ones is a quick visual read on prior influence.
 
 ## Step 7: Observation Distribution Diagnostics
 
-Beyond trajectory plots, it is informative to inspect the implied observation distribution at individual time points. In this step, you will plot the normal distribution predicted by the model at the first observation of the first tree, with the actual observed value marked. A well-calibrated model places observed values near the centre of the predicted distribution rather than in the tails.
+It also helps to inspect the predicted observation distribution at a single time point — here the first observation of the first tree, with the observed value marked. A well-calibrated model places observations near the center of the distribution, not in the tails.
 
 ```julia
 p_obs_mle = plot_observation_distributions(
@@ -406,13 +400,10 @@ p_obs_map
 <!- injected:fe1-pobsmap ->
 ![Predicted observation distribution at the first observation of the first tree (MAP).](figures/fe1/p_obs_map.png)
 
-If an observed value sits far in the tail of the predicted distribution, this may indicate model misspecification - for instance, a residual error distribution that is too narrow, or a structural model that systematically over- or under-predicts at certain ages.
+A value far in the tail points to misspecification — a residual distribution that is too narrow, or a structural model that systematically over- or under-predicts.
 
 ## Summary and Next Steps
 
-This tutorial demonstrated the end-to-end workflow for fixed-effects nonlinear modelling in NoLimits.jl: specifying a scientifically motivated structural model, pairing it with data, estimating parameters via MLE and MAP, and diagnosing the results. Several practical points are worth keeping in mind:
-
-- **MLE is purely data-driven.** It finds the parameter values that maximise the likelihood of the observed data. Declared priors have no effect on the MLE objective.
-- **MAP incorporates prior knowledge.** By adding log-prior terms to the objective, MAP can stabilise estimation when the data provide limited information about certain parameters - a common situation in nonlinear models with saturation or asymptotic behaviour.
-- **Fixed-effects models assume no between-subject variability.** Every individual is predicted by the same curve. When individual trajectories diverge systematically, random effects are needed to account for that heterogeneity. The mixed-effects tutorials show how to extend this model accordingly.
-- **Diagnostic tools are method-agnostic.** Whether you use MLE, MAP, or any other estimation method in NoLimits.jl, functions such as `plot_fits` and `plot_observation_distributions` work identically, making it straightforward to compare results across methods.
+- **MLE vs MAP.** MLE is purely data-driven; MAP adds log-prior terms that stabilize weakly identified parameters — common in nonlinear models with asymptotic behavior. Comparing them shows which parameters the data actually constrain.
+- **No random effects.** Every individual shares one curve; systematic per-tree deviations call for random effects — see the [mixed-effects tutorials](mixed-effects-multiple-methods.md).
+- **Diagnostics are method-agnostic.** `plot_fits` and `plot_observation_distributions` work identically across every estimator.

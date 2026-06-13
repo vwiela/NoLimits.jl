@@ -38,12 +38,12 @@ All plotting functions accept a `style::PlotStyle` keyword argument. Construct a
 `PlotStyle()` with the defaults and override individual fields as needed.
 
 # Keyword Arguments
-- `color_primary::String`: main series colour (default: `"#0072B2"` — blue).
-- `color_secondary::String`: secondary series colour (default: `"#E69F00"` — orange).
-- `color_accent::String`: accent colour (default: `"#009E73"` — green).
-- `color_dark::String`: dark foreground colour (default: `"#2C3E50"`).
-- `color_density::String`: colour for density bands (default: `"#E69F00"`).
-- `color_reference::String`: reference line colour (default: `"#2C3E50"`).
+- `color_primary::String`: main series color (default: `"#0072B2"` — blue).
+- `color_secondary::String`: secondary series color (default: `"#E69F00"` — orange).
+- `color_accent::String`: accent color (default: `"#009E73"` — green).
+- `color_dark::String`: dark foreground color (default: `"#2C3E50"`).
+- `color_density::String`: color for density bands (default: `"#E69F00"`).
+- `color_reference::String`: reference line color (default: `"#2C3E50"`).
 - `font_family::String`: font family for all text (default: `"Helvetica"`).
 - `font_size_title`, `font_size_label`, `font_size_tick`, `font_size_legend`,
   `font_size_annotation`: font sizes in points, applied uniformly across all plots
@@ -599,7 +599,7 @@ parameter element (e.g. `β[1]`, `β[2]`, `Ω[1,1]`, ...).
 - `dm::Union{Nothing, DataModel} = nothing`: data model for the inverse transform when
   `scale=:untransformed`. Inferred from `res` when stored.
 - `scale::Symbol = :untransformed`: `:untransformed` (natural scale) or `:transformed`
-  (optimiser scale). Affects the plotted values; `:untransformed` requires the DataModel.
+  (optimizer scale). Affects the plotted values; `:untransformed` requires the DataModel.
 - `include_parameters`: `Symbol`, `String`, or vector thereof. If set, only the named
   top-level parameter blocks are plotted. Defaults to `nothing` (all free parameters).
 - `exclude_parameters`: `Symbol`, `String`, or vector thereof. If set, the named blocks

@@ -1,22 +1,17 @@
 # Mixed-Effects Tutorial 4: SoftTree Differential-Equation Components (SAEM)
 
-When building mechanistic models of longitudinal data, you often know the broad structure of the system - compartments, conservation laws, transfer pathways - but not the precise functional forms that govern how material moves between states. Neural networks are one way to learn those unknown rate functions from data, as shown in Tutorial 3. Soft decision trees offer an appealing alternative. They can approximate arbitrary nonlinear mappings, yet their branching structure provides built-in feature selection and piecewise-smooth approximation that is often easier to interpret. For the low-dimensional inputs typical of scientific rate functions (a single state variable, or time itself), soft trees can match neural network flexibility with substantially fewer parameters.
-
-In this tutorial, you will build a mixed-effects ODE model in which soft decision trees parameterize the ODE right-hand side, then estimate the model with the Stochastic Approximation Expectation-Maximization (SAEM) algorithm. The model is structurally parallel to Tutorial 3, so you can directly compare the two function-approximation strategies on the same data and compartmental structure.
+This tutorial mirrors the [Neural ODE tutorial](mixed-effects-nn-saem.md) but swaps the neural networks for soft decision trees as the rate-function approximators. Soft trees approximate arbitrary nonlinear mappings, and for the low-dimensional inputs typical of scientific rate functions (a single state, or time) they can match neural-network flexibility with fewer parameters and a more inspectable, piecewise-smooth structure. We build the same two-compartment ODE for the Theophylline data and fit it with Stochastic Approximation Expectation-Maximization (SAEM), with subject-level random effects on each tree's parameters.
 
 ## Learning Goals
 
-By the end of this tutorial, you will be able to:
-
-- Declare `SoftTreeParameters` blocks that create differentiable decision trees whose flattened parameters join the fixed-effects vector, exposing callable functions (e.g., `STA1`) for use inside `@DifferentialEquation`.
-- Wire multiple soft trees into a two-compartment transfer ODE, letting the trees learn unknown rate functions from data.
-- Couple each tree's parameter vector to subject-level random effects via `MvNormal` distributions, giving every individual a personalized version of the dynamics.
-- Fit the model with SAEM using its default settings, which remain stable even when the random-effect vectors are high-dimensional.
-- Visualize individual-level trajectories and observation distributions to assess model adequacy.
+- Declare `SoftTreeParameters` blocks and wire their callables (e.g. `STA1`) into `@DifferentialEquation`.
+- Couple each tree's parameters to subject-level random effects via `MvNormal`.
+- Fit with default SAEM, stable at high random-effect dimension.
+- Diagnose the fitted trajectories and observation distributions.
 
 ## Step 1: Data Setup
 
-In this step, you will load the Theophylline dataset used throughout these tutorials. The dataset records time-series measurements for 12 subjects and provides a clean example of two-compartment transfer dynamics: a substance enters a depot (input) compartment and moves to a central (observed) compartment, where it is measured and gradually cleared. You will reshape the data so that the initial amount `d` appears as a constant covariate for each subject.
+We use the Theophylline dataset (12 subjects) in a flat format where the dose `d` enters as a constant covariate — a two-compartment transfer system (depot → central → cleared).
 
 ```julia
 using NoLimits
@@ -71,14 +66,9 @@ first(df, 10)
 
 ## Step 2: Define SoftTree-Driven ODE Mixed-Effects Model
 
-In this step, you will construct the full mixed-effects model. The guiding idea is the same as in the neural ODE tutorial: rather than specifying closed-form rate laws, you let data-driven function approximators learn the rate functions directly from observations. The difference is the choice of approximator. Each `SoftTreeParameters` block declares a soft decision tree with a specified input dimension and depth. The `depth_st` parameter controls expressiveness - a tree of depth `d` has `2^d` leaf nodes, each contributing a smooth local approximation. The block's flattened parameters become part of the fixed-effects vector, and the associated callable function (e.g., `STA1`) evaluates the tree at any input.
+As in the Neural ODE tutorial, data-driven approximators learn the rate functions — here soft decision trees. Each `SoftTreeParameters` block declares a tree of given input dimension and depth (`depth_st`: a depth-`d` tree has `2^d` leaves); its flattened parameters join the fixed-effects vector and expose a callable (e.g. `STA1`) (see [function approximators](../model-building/universal-function-approximators.md)). Four trees drive the two-compartment system: `fA1`/`fA2` for the depot, `fC1`/`fC2` for the central compartment.
 
-The ODE system wires four soft trees into a two-compartment transfer model:
-
-- `fA1(t)` and `fA2(t)` govern the dynamics of the depot (input) compartment.
-- `fC1(t)` and `fC2(t)` govern the dynamics of the central (observed) compartment.
-
-To capture between-subject variability, each tree's parameter vector is paired with a subject-level random-effect vector drawn from an `MvNormal` distribution centered on the population parameters. This gives every individual a personalized version of the transfer dynamics while sharing structure across the population.
+Each tree's parameters are paired with a subject-level random-effect vector drawn from an `MvNormal` centered on the population parameters, giving every individual a personalized version of the dynamics.
 
 ```julia
 using NoLimits
@@ -145,9 +135,9 @@ model = set_solver_config(
 )
 ```
 
-Before moving on, inspect the assembled model to verify that all blocks - covariates, fixed effects, random effects, ODE, and formulas - are correctly wired together.
-
 ### Model Summary
+
+`summarize` confirms the blocks are wired correctly:
 
 ```julia
 model_summary = NoLimits.summarize(model)
@@ -221,7 +211,7 @@ Helper functions
 
 ## Step 3: Build `DataModel` and Configure SAEM
 
-In this step, you will pair the model with the observed data by constructing a `DataModel`, then configure the SAEM fitting algorithm. SAEM alternates between two phases: an E-step that samples subject-level random effects conditional on the current population parameters, and an M-step that updates those population parameters using stochastic sufficient statistics. Here we use the default configuration, `NoLimits.SAEM()`. With its defaults, SAEM draws the random effects with the adaptive Metropolis sampler (`SaemixMH`) in the E-step and updates the population parameters with a stochastic-approximation (Robbins-Monro) M-step. No special configuration is required even though each tree's full parameter vector is individualized, so the random-effect dimension is high. Running with defaults keeps the example simple and parallel to the neural-ODE tutorial, making the two function-approximation strategies directly comparable.
+After building the `DataModel`, we fit with default SAEM (`NoLimits.SAEM()`): an adaptive-Metropolis E-step samples the random effects, a stochastic-approximation (Robbins-Monro) M-step updates the population parameters (see [SAEM](../estimation/saem.md)). No tuning is needed despite the high random-effect dimension — a full tree-parameter vector per subject.
 
 ```julia
 dm = DataModel(model, df; primary_id=:ID, time_col=:t)
@@ -231,9 +221,9 @@ saem_method = NoLimits.SAEM()
 serialization = SciMLBase.EnsembleThreads()
 ```
 
-Before fitting, review the data model summary to confirm that individuals, covariates, and grouping structures were parsed as expected.
-
 ### DataModel Summary
+
+Confirm individuals, covariates, and grouping structures:
 
 ```julia
 dm_summary = NoLimits.summarize(dm)
@@ -318,7 +308,7 @@ Per-random-effect summary
 
 ## Step 4: Fit and Inspect Core Result Summary
 
-In this step, you will run the SAEM algorithm and examine the results. With the default settings the algorithm iterates up to 300 times, drawing the random effects with the adaptive Metropolis sampler within each E-step. After fitting completes, you will extract the final objective value and parameter count as a quick sanity check before looking at more detailed diagnostics.
+With defaults, SAEM runs up to 300 iterations. We extract the final objective and parameter count as a sanity check.
 
 ```julia
 res_saem = fit_model(
@@ -339,7 +329,7 @@ res_saem = fit_model(
 (objective = -644.2180056833639, n_params = 41)
 ```
 
-For a more detailed view - including parameter estimates and convergence diagnostics - call the `summarize` function on the fit result.
+`summarize` gives parameter estimates and convergence diagnostics:
 
 ```julia
 fit_summary_saem = NoLimits.summarize(res_saem)
@@ -417,7 +407,7 @@ Empirical Bayes random effects summary (across RE levels)
 
 ## Step 5: Fitted Trajectories (First 2 Individuals)
 
-In this step, you will overlay the model's predicted trajectories on the raw observations for the first two subjects. Plotting fitted curves against data provides an immediate visual assessment of model adequacy: do the predicted dynamics capture the timing and magnitude of the observed response?
+Overlaying predictions on the data for the first two subjects checks whether the trees capture the timing and magnitude of the response.
 
 ```julia
 p_fit_saem = plot_fits(
@@ -437,7 +427,7 @@ p_fit_saem
 
 ## Step 6: Observation Distribution Diagnostic
 
-As a final check, you will examine the implied observation distribution at a single data point for the first individual. Rather than showing only a point prediction, this plot displays the full predictive distribution, letting you assess whether the residual variance is well-calibrated and the model's uncertainty envelope is reasonable.
+The predicted observation distribution at one data point for the first individual shows whether the residual variance is well-calibrated.
 
 ```julia
 p_obs_saem = plot_observation_distributions(
@@ -455,7 +445,7 @@ p_obs_saem
 
 ## Interpretation Notes
 
-- This modeling pattern combines mechanistic compartmental structure with soft decision tree function approximators inside a single mixed-effects ODE. The compartments encode known domain knowledge (mass conservation, transfer pathways), while the trees learn the unknown rate functions from data. This separation means you retain interpretable system structure without needing to specify rate-law functional forms in advance.
-- Compared to neural networks, soft trees can be more parameter-efficient for the low-dimensional inputs common in scientific rate functions, and their piecewise-smooth approximation may be easier to inspect post hoc. The choice between the two is problem-dependent; both can be embedded in the same NoLimits framework with minimal code changes (compare this tutorial with Tutorial 3).
-- Default SAEM (`NoLimits.SAEM()`) is sufficient here: the adaptive Metropolis E-step and stochastic-approximation M-step remain stable even when the individualized parameter vectors are high-dimensional. When defaults are not enough, SAEM also exposes closed-form Gaussian block updates through `builtin_stats=:closed_form` together with the `re_mean_params` mapping.
-- The structural settings in this tutorial (tree depth, ODE solver tolerances) are intentionally modest to keep runtime short. For production analyses, consider deeper trees, increasing `maxiters` and the number of MCMC samples to ensure thorough convergence, and tightening the ODE solver tolerances.
+- **Hybrid mechanistic-tree ODE.** The compartments encode known structure; the trees learn the unknown rate functions, so you keep interpretable structure without specifying rate-law forms.
+- **Trees vs networks.** Soft trees can be more parameter-efficient for the low-dimensional inputs common in rate functions, and their piecewise-smooth form is easier to inspect; both embed in the same framework with minimal code change (compare the [Neural ODE tutorial](mixed-effects-nn-saem.md)).
+- **Default SAEM suffices** even at high random-effect dimension. For finer control, use closed-form Gaussian block updates via `builtin_stats=:closed_form` with `re_mean_params`.
+- **Settings are modest for speed.** For production, use deeper trees, raise `maxiters` and sample counts, and tighten the ODE solver tolerances.

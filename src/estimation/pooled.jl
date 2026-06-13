@@ -20,7 +20,7 @@ using Statistics
 Pooled estimation for models with random effects. Each individual's random effects are
 set to the **plug-in value of their RE distribution** (mean, falling back to median; a
 fixed-draw Monte-Carlo mean for normalizing flows), then the data log-likelihood alone is
-optimised over the free fixed effects. The plug-in is a function of the fixed effects and
+optimized over the free fixed effects. The plug-in is a function of the fixed effects and
 is recomputed at every objective evaluation, so parameters that shift the plug-in (e.g. a
 population mean inside the RE distribution) are estimated.
 
@@ -36,7 +36,7 @@ The freeze classification is reported in `get_notes(res)`. The RE prior is never
 evaluated.
 
 # Keyword Arguments
-- `optimizer`: Optimization.jl-compatible optimiser. Defaults to `LBFGS` with backtracking.
+- `optimizer`: Optimization.jl-compatible optimizer. Defaults to `LBFGS` with backtracking.
 - `optim_kwargs::NamedTuple = NamedTuple()`: forwarded to `Optimization.solve`.
 - `adtype`: AD backend. Defaults to `AutoForwardDiff()`.
 - `lb`/`ub`: bounds on the transformed scale, or `nothing` to use model-declared bounds.
@@ -44,7 +44,7 @@ evaluated.
 - `force_free::Vector{Symbol} = Symbol[]`: parameter names exempt from auto-freezing.
 - `refreeze_check::Symbol = :warn`: post-fit sensitivity re-check at the optimum;
   `:warn` records violations in the notes, `:refit` unfreezes violators and continues
-  optimisation warm-started from the current optimum.
+  optimization warm-started from the current optimum.
 - `identifiable_only::Bool = true`: freeze plug-in-collinear parameters (pivoted
   redundancy elimination); `false` keeps all contributing parameters free.
 - `n_probes::Int = 3`: number of probe points (start + jittered) for the sensitivity
@@ -133,7 +133,7 @@ end
     PooledResult{S, O, I, R, N, E} <: MethodResult
 
 Method-specific result from a [`Pooled`](@ref) or [`PooledMap`](@ref) fit. Stores the
-optimisation solution plus the per-individual plug-in random effects evaluated at the
+optimization solution plus the per-individual plug-in random effects evaluated at the
 fitted fixed effects. The `notes` field records the plug-in strategy per random effect
 and the freeze classification (`frozen_dispersion`, `frozen_collinear`, `frozen_inert`,
 `frozen_unverified`, `weakly_identified`, `unfrozen_by_invariance`, `unfrozen_postfit`,
@@ -229,6 +229,25 @@ function _pooled_eta_value(dist, dim::Int, strategy, ::Type{T}) where {T}
     return Vector{T}(v)
 end
 
+# Per-individual plug-in η fill for the `_compute_pooled_etas` fast path, behind a
+# function barrier so `axs` / `ηlen` / `T` arrive as positional arguments (concrete)
+# rather than locals captured by the comprehension closure. Previously `axs`/`ηlen`
+# were assigned in BOTH the fast and the heterogeneous branch and captured by the
+# fast-path comprehension, which boxed them (`Core.Box`) and inferred the whole
+# per-individual body as `Any` (a runtime dispatch per individual per objective eval).
+@inline function _pooled_fill_ind_eta(dists_builder::DB, θs::TH, const_cov,
+        model_funs, helpers, re_names, dims, strategies, ::Type{T}, axs::AX,
+        ηlen::Int) where {DB, TH, T, AX}
+    dists = dists_builder(θs, const_cov, model_funs, helpers)
+    vals = Vector{T}(undef, ηlen)
+    pos = 1
+    for (ri, re) in enumerate(re_names)
+        val = _pooled_eta_value(getproperty(dists, re), dims[ri], strategies[ri], T)
+        pos = _pooled_fill_eta!(vals, pos, val)
+    end
+    return ComponentArray(vals, axs)
+end
+
 function _compute_pooled_etas(dm::DataModel, θ::ComponentArray, strategies)
     model = get_model(dm)
     lp_cache = dm.re_group_info.laplace_cache
@@ -251,32 +270,17 @@ function _compute_pooled_etas(dm::DataModel, θ::ComponentArray, strategies)
                           all(
         ri -> (lp_cache.dims[ri] == 1) == lp_cache.is_scalar[ri], eachindex(re_names))
     if template_compatible
-        # Fast path (one RE level per group per individual): fill a flat vector
-        # and wrap it with the precomputed axes — same trick as
-        # `_build_eta_ind_fast`, and the comprehension keeps η_vec's eltype
-        # concrete. This runs once per objective evaluation, per individual.
+        # Fast path (one RE level per group per individual): fill a flat vector and
+        # wrap it with the precomputed axes — same trick as `_build_eta_ind_fast`.
+        # The per-individual fill is hoisted into `_pooled_fill_ind_eta` (axs / ηlen /
+        # T passed positionally) so the comprehension closure does not capture them;
+        # see that helper for the Core.Box this avoids. Runs once per objective
+        # evaluation, per individual.
         axs = getaxes(template)
         ηlen = length(template)
-        return [begin
-                    ind = individuals[i]
-                    dists = dists_builder(θs, ind.const_cov, model_funs, helpers)
-                    vals = Vector{T}(undef, ηlen)
-                    pos = 1
-                    for (ri, re) in enumerate(re_names)
-                        dist = getproperty(dists, re)
-                        val = _pooled_eta_value(dist, lp_cache.dims[ri], strategies[ri], T)
-                        if val isa Number
-                            vals[pos] = val
-                            pos += 1
-                        else
-                            for k in eachindex(val)
-                                vals[pos + k - 1] = val[k]
-                            end
-                            pos += length(val)
-                        end
-                    end
-                    ComponentArray(vals, axs)
-                end
+        dims = lp_cache.dims
+        return [_pooled_fill_ind_eta(dists_builder, θs, individuals[i].const_cov,
+                    model_funs, helpers, re_names, dims, strategies, T, axs, ηlen)
                 for i in 1:n]
     end
     # Heterogeneous-shape path (e.g. a dim-1 NPF RE kept as a 1-vector): probe the
@@ -940,7 +944,7 @@ function _fit_pooled(dm::DataModel, method;
             error("Parameter $(name) cannot be both in constants and force_free.")
     end
     all(name in keys(constants) for name in fixed_names) &&
-        error("Pooled() has no free fixed effects to optimise.")
+        error("Pooled() has no free fixed effects to optimize.")
 
     θ0_u = get_θ0_untransformed(fe)
     if theta_0_untransformed !== nothing
@@ -994,7 +998,7 @@ function _fit_pooled(dm::DataModel, method;
     frozen_unverified = [n for n in part.frozen_unverified if n in frozen_dispersion]
     frozen_collinear = copy(part.frozen_collinear)
 
-    # ── optimisation (with optional post-fit unfreeze-and-continue rounds) ──
+    # ── optimization (with optional post-fit unfreeze-and-continue rounds) ──
     max_rounds = method.refreeze_check === :refit ? 3 : 1
     θ_round_u = θ0_u
     unfrozen_postfit = Symbol[]
@@ -1005,7 +1009,7 @@ function _fit_pooled(dm::DataModel, method;
         for n in vcat(frozen_dispersion, frozen_collinear))
         merged_constants = merge(auto_constants, constants)  # user constants win
         all(name in keys(merged_constants) for name in fixed_names) &&
-            error("Pooled() has no free fixed effects to optimise (all are RE " *
+            error("Pooled() has no free fixed effects to optimize (all are RE " *
                   "distribution parameters with no likelihood contribution). Add at " *
                   "least one fixed effect in @formulas or @DifferentialEquation.")
         sol, θ_hat_t, θ_hat_u = _pooled_solve(dm, method, θ_round_u, merged_constants,
@@ -1071,7 +1075,7 @@ function _fit_pooled(dm::DataModel, method;
         store_data_model ? dm : nothing, fit_args, fit_kwargs)
 end
 
-# One optimisation pass over the free fixed effects, with η either recomputed from θ
+# One optimization pass over the free fixed effects, with η either recomputed from θ
 # at every objective evaluation (when a free parameter feeds an RE distribution) or
 # precomputed once (fast path — plug-ins cannot move).
 function _pooled_solve(dm::DataModel, method, θ_start_u::ComponentArray,

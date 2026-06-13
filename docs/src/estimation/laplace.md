@@ -166,7 +166,7 @@ laplace_global_outer = NoLimits.Laplace(;
 
 ### Detailed Behavior
 
-This section explains the behaviour of the options whose effect is not obvious from their name. See the [`Laplace`](@ref) entry in the API reference for the complete keyword list and defaults.
+This section explains the behavior of the options whose effect is not obvious from their name. See the [`Laplace`](@ref) entry in the API reference for the complete keyword list and defaults.
 
 - `inner_grad_tol=:auto` resolves to `1e-8` for non-ODE models and `1e-2` for ODE models.
 - `multistart_sampling` supports `:lhs` (Latin hypercube sampling) and `:random`.

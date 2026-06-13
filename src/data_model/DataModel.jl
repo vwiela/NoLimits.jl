@@ -22,7 +22,7 @@ using Random
 """
     DataModelConfig{S}
 
-Configuration struct for a [`DataModel`](@ref), storing column names, serialisation
+Configuration struct for a [`DataModel`](@ref), storing column names, serialization
 algorithm, and save-time mode.
 
 # Fields
@@ -778,7 +778,7 @@ end
 
 # Materialise a covariate-vector value from a NamedTuple of its per-column entries.
 # When every entry is `Real`, return a `ComponentArray` so the value behaves both as a
-# labelled record (`x.Age`, `x.weight`) AND as a numeric vector (`x' * β`, `dot(x, β)`,
+# labeled record (`x.Age`, `x.weight`) AND as a numeric vector (`x' * β`, `dot(x, β)`,
 # `sum(x)`, indexing). Non-numeric (e.g. categorical) covariate vectors stay NamedTuples:
 # field access still works and vector arithmetic is undefined for them anyway. The branch
 # is decided at compile time from the NamedTuple type, so the hot per-row path stays

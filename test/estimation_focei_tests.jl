@@ -13,7 +13,7 @@ using SpecialFunctions: trigamma
 const NL = NoLimits
 
 @testset "FOCEI Fisher-information registry" begin
-    # Closed-form values (Distributions.jl native parameterisation).
+    # Closed-form values (Distributions.jl native parameterization).
     @test NL._focei_expected_information(Normal(0.3, 2.0)) ≈ [0.25 0.0; 0.0 0.5]
     @test NL._focei_expected_information(LogNormal(0.1, 2.0)) ≈ [0.25 0.0; 0.0 0.5]
     @test NL._focei_expected_information(Poisson(3.0)) ≈ fill(1 / 3, 1, 1)
@@ -233,7 +233,7 @@ end
 
 @testset "FOCEI Hessian catches numeric failures (backtracks, no crash)" begin
     # σ = sqrt(c + η) throws a DomainError when η < -c; the FOCEI Hessian builder must
-    # convert that to a NaN Hessian (→ -Inf marginal → optimiser backtracks), mirroring
+    # convert that to a NaN Hessian (→ -Inf marginal → optimizer backtracks), mirroring
     # the robustness of _laplace_logf_batch, rather than crashing the fit.
     model = @Model begin
         @fixedEffects begin
@@ -266,7 +266,7 @@ end
     @test all(isnan,
         NL._focei_negH_batch(
             dm, info, θu, [-1.0], const_cache, ll_cache; interaction = true))
-    # A full fit must complete (the optimiser may probe the invalid region).
+    # A full fit must complete (the optimizer may probe the invalid region).
     res = fit_model(
         dm, NL.FOCEI(multistart_n = 1, multistart_k = 1, optim_kwargs = (maxiters = 4,));
         serialization = NL.EnsembleSerial())

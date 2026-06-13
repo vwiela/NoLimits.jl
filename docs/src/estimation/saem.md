@@ -232,7 +232,7 @@ When the M-step is performed numerically (i.e., no closed-form update is provide
   - Default: `(; iterations=10, g_abstol=1e-4, f_reltol=1e-6)`. The inner LBFGS is capped at 10 iterations per SAEM step; the outer SA loop provides the global convergence trajectory.
 - `mstep_sa_on_params`
   - When `true` (default), the M-step optimizes only the current iteration's samples and applies a Robbins-Monro parameter update: `θ_new = θ_old + γ*(θ̂ - θ_old)`. The ring buffer is capped to capacity 1, eliminating storage and reweighting overhead from previous snapshots. This is significantly more memory-efficient than the ring-buffer path and is the recommended mode.
-  - When `false`, the M-step minimizes the full ring-buffer Q-function and sets `θ_new = θ̂` directly. Useful as a diagnostic or when you want the classical ring-buffer SAEM behaviour.
+  - When `false`, the M-step minimizes the full ring-buffer Q-function and sets `θ_new = θ̂` directly. Useful as a diagnostic or when you want the classical ring-buffer SAEM behavior.
 
 SAEM uses the SciML [Optimization.jl](https://docs.sciml.ai/Optimization/stable/) interface for numerical M-step updates.
 
@@ -345,9 +345,9 @@ These arguments control the ring buffer used for numerical Q evaluation (the pat
 - `q_store_epsilon` (default `1e-10`)
   - Weight pruning threshold. After each push, snapshots whose SA weight falls below
     this value are removed from the oldest end of the buffer (subject to `q_store_min`).
-    During the γ=1 stabilisation phase all previous snapshots are immediately pruned,
+    During the γ=1 stabilization phase all previous snapshots are immediately pruned,
     keeping only the current iteration's sample in the buffer.
-  - The retained weights are renormalised to sum to 1 before evaluating Q, so the
+  - The retained weights are renormalized to sum to 1 before evaluating Q, so the
     objective is scale-invariant to pruning.
   - Has no effect when `suffstats` is provided; a warning is emitted if set to a
     non-default value alongside `suffstats`.
@@ -465,7 +465,7 @@ res = fit_model(dm, SAEM(sampler=AdaptiveNoLimitsMH()))
 Constructor keywords:
 - `adapt_start::Int = 50`: pooled sample count before Haario updates activate.
 - `init_scale::Float64 = 1.0`: multiplier on the prior-based initial proposal covariance.
-- `eps_reg::Float64 = 1e-6`: regularisation added to the diagonal to ensure positive-definiteness.
+- `eps_reg::Float64 = 1e-6`: regularization added to the diagonal to ensure positive-definiteness.
 
 `AdaptiveNoLimitsMH` is most useful when the RE posterior covariance differs substantially from the prior, when REs are correlated (`MvNormal` with `d ≥ 2`), or when the prior is weakly informative.
 

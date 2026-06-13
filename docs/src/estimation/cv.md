@@ -16,7 +16,7 @@ Two splitting strategies are available via the `kind` keyword:
 | `:id` | Whole individuals are assigned to folds. Test individuals are entirely absent from training - the unseen-individual prediction strategy applies to all of them. |
 | `:observation` | Observations from each individual are distributed across folds using a floor/ceiling round-robin. Event rows (dosing, resets) are always included in both train and test, so the ODE can be integrated correctly on either subset. |
 
-`:id`-wise CV measures generalisation to new subjects; `:observation`-wise CV measures how well the model interpolates within a subject's time series given a subset of their observations.
+`:id`-wise CV measures generalization to new subjects; `:observation`-wise CV measures how well the model interpolates within a subject's time series given a subset of their observations.
 
 ## Random-Effects Prediction Modes
 
@@ -190,7 +190,7 @@ println(first(os, 5))
 ## Example: ID-Wise CV with Conditional MC for Seen Subjects
 
 When `kind=:id`, some subjects are entirely absent from training. The defaults
-use the prior mean for unseen subjects. To instead marginalise over 50 draws
+use the prior mean for unseen subjects. To instead marginalize over 50 draws
 from the conditional posterior for seen subjects:
 
 ```julia

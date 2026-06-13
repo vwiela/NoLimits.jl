@@ -27,8 +27,8 @@ using Distributions
         @test p.prior isa Dirichlet
     end
 
-    @testset "ProbabilityVector silent normalisation" begin
-        # Sum slightly off from 1 — should be normalised silently
+    @testset "ProbabilityVector silent normalization" begin
+        # Sum slightly off from 1 — should be normalized silently
         v = [0.2, 0.5, 0.3 + 1e-8]
         p = ProbabilityVector(v)
         @test isapprox(sum(p.value), 1.0; atol = 1e-14)
@@ -72,7 +72,7 @@ using Distributions
         @test A.calculate_se == true
     end
 
-    @testset "DiscreteTransitionMatrix silent row normalisation" begin
+    @testset "DiscreteTransitionMatrix silent row normalization" begin
         P = [0.6 0.4+1e-8; 0.3 0.7]
         A = DiscreteTransitionMatrix(P)
         @test all(isapprox.(sum(A.value; dims = 2), 1.0; atol = 1e-14))

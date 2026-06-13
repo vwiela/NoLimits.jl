@@ -137,7 +137,7 @@ end
 
 # ─── Method stripping ─────────────────────────────────────────────────────────
 # FittingMethod structs contain optimizer/sampler objects with bare Function fields
-# that JLD2 cannot serialise cleanly.  Replace them with a lightweight stub.
+# that JLD2 cannot serialize cleanly.  Replace them with a lightweight stub.
 
 _strip_fitting_method(::MLE) = _SavedFittingMethod(:mle)
 _strip_fitting_method(::MAP) = _SavedFittingMethod(:map)

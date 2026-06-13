@@ -187,11 +187,11 @@ end
     p_prior = probabilities_hidden_states(hmm)
     @test isapprox(posterior_hidden_states(hmm, [missing, missing]), p_prior; atol = 1e-10)
 
-    # Observation at state-1 means → posterior favours state 1
+    # Observation at state-1 means → posterior favors state 1
     post1 = posterior_hidden_states(hmm, [0.0, 2.0])
     @test post1[1] > post1[2]
 
-    # Observation at state-2 means → posterior favours state 2
+    # Observation at state-2 means → posterior favors state 2
     post2 = posterior_hidden_states(hmm, [3.0, -1.0])
     @test post2[2] > post2[1]
 end

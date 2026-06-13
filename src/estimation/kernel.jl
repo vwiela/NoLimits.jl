@@ -13,7 +13,7 @@ Numerically stable computation of log|Σ_r s_r exp(a_r)| where s_r ∈ {+1, -1}.
 
 Returns `(log|result|, sign(result))` as `(Float64, Int8)`.
 
-The sum is split into positive and negative contributions, each stabilised by
+The sum is split into positive and negative contributions, each stabilized by
 the maximum over all `logvals`:
 
     pos = Σ_{s_r=+1} exp(a_r - amax)
@@ -220,7 +220,7 @@ Estimate the batch marginal log-likelihood via MCMC-guided Gaussian importance s
 **Algorithm:**
 1. Run Turing MCMC with `n_warmup` adaptation (warmup) steps followed by `max(n_warmup, 50)`
    kept steps to draw approximate posterior samples `b_r ~ p(b | y, θ)`.
-2. Fit a Gaussian proposal `q = N(μ, Σ)` to those posterior samples (mean + regularised
+2. Fit a Gaussian proposal `q = N(μ, Σ)` to those posterior samples (mean + regularized
    covariance). This captures the location and scale of the posterior without assuming
    anything about its shape at the mode.
 3. Draw `n_samples` **fresh** IID samples from `q`. These are the IS points.

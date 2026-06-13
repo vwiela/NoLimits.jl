@@ -26,3 +26,16 @@ end
 # work into tuple operations without allocating intermediate vectors.
 @inline _hmm_probs_tuple(p::AbstractVector, ::NTuple{N, Any}) where {N} = ntuple(
     i -> @inbounds(p[i]), Val(N))
+
+# Combined per-row HMM accessor: returns (logpdf(d, y), posterior_hidden_states(d, y)).
+# The forward-filter loop in `_loglikelihood_individual` (and cv) needs BOTH every
+# observed row. The continuous-time families recompute the state-probability
+# propagation `exp(QΔt)` (the dominant per-row cost) once in `logpdf` and again in
+# `posterior_hidden_states`; they specialise this accessor to propagate ONCE and
+# reuse it for both, using the EXACT per-state ops of the two methods (bit-identical
+# values). The generic fallback below just calls both — correct for every family;
+# the discrete-time families inline `transpose(M)*p` and so share nothing, gaining
+# nothing from a specialisation but losing nothing from the fallback. Specialisations
+# live in the CT family files (ContinuousTimeHMM / MVContinuousTimeHMM /
+# ContinuousTimeObservedStatesMarkovModel / CoarsedObservedStatesMarkoModel).
+@inline _hmm_logpdf_and_posterior(d, y) = (logpdf(d, y), posterior_hidden_states(d, y))

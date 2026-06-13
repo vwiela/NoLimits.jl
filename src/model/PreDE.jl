@@ -266,13 +266,19 @@ macro preDifferentialEquation(block)
     skip_vars = Set([:Inf, :NaN, :nothing, :missing, :true, :false])
     var_syms = Set([s for s in var_syms if !(s in skip_vars)])
 
-    prop_syms_expr = Expr(:call, :Set, Expr(:vect, QuoteNode.(collect(prop_syms))...))
-    binds_vars = [quote
-                      if $(QuoteNode(sym)) in $prop_syms_expr
+    # `sym in prop_syms` is decidable at macro-expansion time — emit the chosen
+    # branch directly. (The old code carried the membership test into the generated
+    # function as `sym in Set([...])`, allocating a fresh Set on every builder
+    # invocation; `calculate_prede` runs per individual per objective evaluation.
+    # Mirrors the identical fix in RandomEffects.jl.)
+    binds_vars = [if sym in prop_syms
+                      quote
                           if hasproperty(constant_features_i, $(QuoteNode(sym)))
                               $(sym) = getproperty(constant_features_i, $(QuoteNode(sym)))
                           end
-                      else
+                      end
+                  else
+                      quote
                           if hasproperty(constant_features_i, $(QuoteNode(sym)))
                               $(sym) = getproperty(constant_features_i, $(QuoteNode(sym)))
                           elseif hasproperty(random_effects, $(QuoteNode(sym)))

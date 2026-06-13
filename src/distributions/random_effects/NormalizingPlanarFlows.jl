@@ -208,7 +208,7 @@ end
 # Use the underlying transformed distribution's bijector for HMC/NUTS.
 Bijectors.bijector(d::NormalizingPlanarFlow) = Bijectors.bijector(d.base)
 
-# DynamicPPL >=0.41 vectorises a variable's link via `Bijectors.VectorBijectors.to_linked_vec(dist)`
+# DynamicPPL >=0.41 vectorizes a variable's link via `Bijectors.VectorBijectors.to_linked_vec(dist)`
 # on the tilde path. Delegate to the underlying transformed distribution (consistent with the
 # bijector delegation above). Guarded so the package still loads on Bijectors < 0.16, which has
 # no `VectorBijectors` submodule (and whose DynamicPPL never calls this).
@@ -228,7 +228,7 @@ Bijectors.bijector(d::NormalizingPlanarFlow) = Bijectors.bijector(d.base)
     end
 end
 
-# Estimate covariance via sampling — used only for MH step-size initialisation,
+# Estimate covariance via sampling — used only for MH step-size initialization,
 # so an empirical approximation is sufficient.
 function Statistics.cov(d::NormalizingPlanarFlow; n_samples::Int = 2000)
     Statistics.cov(rand(default_rng(), d, n_samples)')

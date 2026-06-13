@@ -528,7 +528,18 @@ function _build_laplace_batch_infos(dm::DataModel, constants_re::NamedTuple)
             map = _LaplaceREMap(levels, level_to_index)
             re_info[ri] = _LaplaceREInfo(map, ranges, reps, dim, is_scalar)
         end
-        batch_infos[bi] = _LaplaceBatchInfo(inds, re_info, total_dim)
+        # Narrow `re_info` to a concrete eltype before storing it. The `undef`
+        # scratch buffer above has the abstract `_LaplaceREInfo` eltype, which makes
+        # `_LaplaceBatchInfo.re_info` abstract — so every `batch_info.re_info[ri]`
+        # field access on the per-row EBE hot path (`_build_eta_ind_fast`,
+        # `_laplace_logf_batch`, the grad/Hessian assembly) boxes and dynamic-
+        # dispatches. All entries share one concrete type, so `identity.` narrows
+        # the eltype with no data copy (same element objects); it auto-falls back to
+        # an abstract eltype if a future config ever mixes element types. The outer
+        # `batch_infos::Vector{_LaplaceBatchInfo}` stays abstract on purpose (the
+        # per-batch dispatch is amortized once per batch, and ~25 signatures across
+        # the estimators annotate `::Vector{_LaplaceBatchInfo}`).
+        batch_infos[bi] = _LaplaceBatchInfo(inds, identity.(re_info), total_dim)
     end
     return pairing, batch_infos, const_cache
 end
@@ -658,9 +669,9 @@ function _laplace_lhs_draws_mvnormal(dist, n::Int, rng::AbstractRNG, dim::Int)
 end
 
 # Robustness wrapper: RE-distribution construction can throw on a numerically
-# degenerate θ the outer optimiser steps into (e.g. a singular Ω, even on the
+# degenerate θ the outer optimizer steps into (e.g. a singular Ω, even on the
 # cholesky scale via exp-underflow). Fall back to a zero start — the subsequent
-# logf evaluation returns -Inf and the optimiser backtracks instead of the whole
+# logf evaluation returns -Inf and the optimizer backtracks instead of the whole
 # fit crashing (mirrors the `_laplace_logf_batch` exception policy).
 function _laplace_default_b0(dm::DataModel,
         batch_info::_LaplaceBatchInfo,
@@ -1089,7 +1100,7 @@ function _const_re_prior_logf(dm::DataModel,
 end
 
 # Wrapper around the batch log-density. An invalid RE covariance — e.g. a degenerate
-# matrix-exp (`:expm`) draw the optimiser/UQ steps into — makes distribution construction
+# matrix-exp (`:expm`) draw the optimizer/UQ steps into — makes distribution construction
 # throw (`PosDefException` etc.) rather than return a finite density. Treat such numeric
 # failures as a -Inf log-density so callers backtrack instead of crashing. The try/catch is
 # free on the non-throwing path, so the hot-path performance of the impl is preserved.
@@ -2298,17 +2309,17 @@ end
               lb, ub) <: FittingMethod
 
 Laplace approximation with Empirical Bayes Estimates (EBE) for random-effects models.
-The outer optimiser maximises the Laplace-approximated marginal likelihood over the
-fixed effects, while the inner optimiser computes per-individual MAP estimates of the
+The outer optimizer maximizes the Laplace-approximated marginal likelihood over the
+fixed effects, while the inner optimizer computes per-individual MAP estimates of the
 random effects.
 
 # Keyword Arguments
-- `optimizer`: outer Optimization.jl optimiser. Defaults to `LBFGS` with backtracking.
+- `optimizer`: outer Optimization.jl optimizer. Defaults to `LBFGS` with backtracking.
 - `optim_kwargs::NamedTuple = NamedTuple()`: keyword arguments for the outer `solve` call.
-- `adtype`: AD backend for the outer optimiser. Defaults to `AutoForwardDiff()`.
-- `inner_optimizer`: inner optimiser for computing EBE modes. Defaults to `LBFGS`.
+- `adtype`: AD backend for the outer optimizer. Defaults to `AutoForwardDiff()`.
+- `inner_optimizer`: inner optimizer for computing EBE modes. Defaults to `LBFGS`.
 - `inner_kwargs::NamedTuple = NamedTuple()`: keyword arguments for the inner `solve` call.
-- `inner_adtype`: AD backend for the inner optimiser. Defaults to `AutoForwardDiff()`.
+- `inner_adtype`: AD backend for the inner optimizer. Defaults to `AutoForwardDiff()`.
 - `inner_grad_tol`: gradient tolerance for inner convergence (`:auto` chooses automatically).
 - `multistart_n::Int = 50`: number of random starts for the inner EBE multistart.
 - `multistart_k::Int = 10`: number of best starts to refine in the inner multistart.
@@ -2316,7 +2327,7 @@ random effects.
 - `multistart_max_rounds::Int = 1`: maximum multistart refinement rounds.
 - `multistart_sampling::Symbol = :lhs`: inner multistart sampling strategy (`:lhs` or `:random`).
 - `jitter::Float64 = 1e-6`: initial diagonal jitter added to ensure Hessian PD.
-- `max_tries::Int = 6`: maximum attempts to regularise the Hessian.
+- `max_tries::Int = 6`: maximum attempts to regularize the Hessian.
 - `jitter_growth::Float64 = 10.0`: multiplicative growth factor for jitter on each retry.
 - `adaptive_jitter::Bool = true`: whether to adapt jitter magnitude based on scale.
 - `jitter_scale::Float64 = 1e-6`: scale for the adaptive jitter.

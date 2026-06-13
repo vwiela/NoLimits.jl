@@ -52,7 +52,7 @@ end
 Compute the marginal prior probabilities of the hidden states at the current observation
 time, propagated from `hmm.initial_dist` through the transition dynamics.
 
-Returns a normalised probability vector of length `n_states`.
+Returns a normalized probability vector of length `n_states`.
 """
 function probabilities_hidden_states(hmm::DiscreteTimeDiscreteStatesHMM)
     # Propagate one discrete step from the provided prior state probabilities.
@@ -66,8 +66,8 @@ end
 Compute posterior probabilities of hidden states given observation `y`.
 """
 function posterior_hidden_states(hmm::DiscreteTimeDiscreteStatesHMM, y::Real)
-    # Same op order as the former vector pipeline (propagate, normalise by the
-    # same sum, weight by the emission pdf, normalise) with the per-state steps
+    # Same op order as the former vector pipeline (propagate, normalize by the
+    # same sum, weight by the emission pdf, normalize) with the per-state steps
     # fused into tuples — bit-identical values, one matvec + the output vector
     # instead of four intermediate vectors per call (this runs once per row in
     # the HMM forward filter).

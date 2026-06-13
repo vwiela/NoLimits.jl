@@ -24,13 +24,13 @@ parameter vectors and returns the best result.
 
 Starting points are drawn either from the fixed-effect priors or from user-supplied
 `dists`; the top-`n_draws_used` candidates (by a cheap objective evaluation) are then
-fully optimised.
+fully optimized.
 
 # Keyword Arguments
 - `dists::NamedTuple = NamedTuple()`: per-parameter sampling distributions, keyed by
   fixed-effect name. Parameters without an entry use their prior, if available.
 - `n_draws_requested::Int = 100`: number of candidate starting points to sample.
-- `n_draws_used::Int = 50`: number of candidates to fully optimise after screening.
+- `n_draws_used::Int = 50`: number of candidates to fully optimize after screening.
 - `sampling::Symbol = :random`: sampling strategy for starting points: `:random` or `:lhs`
   (Latin hypercube sampling).
 - `serialization::SciMLBase.EnsembleAlgorithm = EnsembleThreads()`: parallelisation
@@ -41,9 +41,9 @@ fully optimised.
   - `:prior_mean` — evaluates the observation log-likelihood with random effects fixed at
     their prior means under each candidate θ. Fast but ignores RE adaptability.
   - `:ebe` — for each candidate θ, first computes per-individual Empirical Bayes Estimates
-    (EBEs) by maximising the joint log-density (observation ll + RE prior), then uses the
+    (EBEs) by maximizing the joint log-density (observation ll + RE prior), then uses the
     resulting joint log-density as the screening score. More accurate but slower.
-- `ebe_maxiters::Int = 30`: maximum inner-optimisation iterations per individual when
+- `ebe_maxiters::Int = 30`: maximum inner-optimization iterations per individual when
   `screening = :ebe`. Lower values trade accuracy for speed.
 """
 struct Multistart{D, S, R}
@@ -351,7 +351,7 @@ function _build_mean_eta(dm::DataModel, θu::ComponentArray)
     return etas
 end
 
-# Compute per-individual EBEs by maximising the joint log-density (obs ll + RE prior)
+# Compute per-individual EBEs by maximizing the joint log-density (obs ll + RE prior)
 # for each candidate θu.  Returns (etas, joint_score) where joint_score is the total
 # joint log-density at the EBEs (used as the screening score).
 function _build_ebe_eta(dm::DataModel, θu::ComponentArray, ll_cache; maxiters::Int = 30)
@@ -403,7 +403,7 @@ function _build_ebe_eta(dm::DataModel, θu::ComponentArray, ll_cache; maxiters::
             etas[i] = η0_i
             continue
         end
-        # Closure: negative joint log-density to minimise
+        # Closure: negative joint log-density to minimize
         neg_logf = let dm = dm, i = i, θu = θu, ll_cache = ll_cache,
             axs = axs, dists = dists, re_logpdf_fn = re_logpdf_fn,
             re_names = re_names, re_names_tuple = re_names_tuple
@@ -446,7 +446,7 @@ function _multistart_screen(dm::DataModel,
         screening::Symbol,
         ebe_maxiters::Int;
         progress::Bool = true)
-    # EBE inner optimisation is serial per individual; use EnsembleSerial for that path.
+    # EBE inner optimization is serial per individual; use EnsembleSerial for that path.
     cache_serialization = screening == :ebe ? EnsembleSerial() : serialization
     cache = build_ll_cache(dm; ode_args = ode_args, ode_kwargs = ode_kwargs,
         serialization = cache_serialization, force_saveat = true)
@@ -466,7 +466,7 @@ function _multistart_screen(dm::DataModel,
         progress && next!(screen_p)
     end
     idxs = partialsortperm(scores, 1:min(n_used, length(candidates)))
-    # Return selected candidates and their scores (sign-flipped back from minimisation scores)
+    # Return selected candidates and their scores (sign-flipped back from minimization scores)
     selected_scores = [-scores[j] for j in idxs]
     return candidates[idxs], selected_scores
 end

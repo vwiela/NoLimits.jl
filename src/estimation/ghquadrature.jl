@@ -30,7 +30,7 @@ Approximates the batch marginal likelihood via
     log L_batch ≈ signed_logsumexp_r [ log|W_r| + Σᵢ ℓᵢ(μ + Lzᵣ, θ) ]
 
 where `{(zᵣ, Wᵣ)}` are Smolyak–Gauss-Hermite quadrature nodes/weights at the
-requested `level`.  Unlike `Laplace`, there is no inner optimisation during the
+requested `level`.  Unlike `Laplace`, there is no inner optimization during the
 forward pass: the objective is fully differentiable by `AutoForwardDiff`.
 
 # Keyword Arguments
@@ -41,14 +41,14 @@ forward pass: the objective is fully differentiable by `AutoForwardDiff`.
     level 1.  The batch grid is the tensor product of per-group Smolyak grids.
   Levels 1–3 are numerically stable; higher levels may exhibit cancellation
   in signed logsumexp.
-- `optimizer`: outer Optimization.jl-compatible optimiser.  Defaults to LBFGS
+- `optimizer`: outer Optimization.jl-compatible optimizer.  Defaults to LBFGS
   with backtracking line search.
 - `optim_kwargs::NamedTuple = NamedTuple()`: forwarded to `Optimization.solve`
   (e.g. `maxiters`, `reltol`).
 - `adtype`: AD backend for the outer gradient.  Defaults to
   `AutoForwardDiff()`.
 - `inner_options / inner_optimizer / inner_kwargs / inner_adtype / inner_grad_tol`:
-  configure the Laplace-style inner optimiser used **only post-hoc** to compute
+  configure the Laplace-style inner optimizer used **only post-hoc** to compute
   empirical-Bayes mode estimates for `get_random_effects`.
 - `multistart_options / multistart_n / multistart_k / multistart_grad_tol /
   multistart_max_rounds / multistart_sampling`: multistart settings for the

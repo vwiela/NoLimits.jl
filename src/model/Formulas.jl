@@ -399,7 +399,7 @@ function _formulas_build_formulas_expr(ir::FormulasIR,
         end
     end
 
-    # Also recognise S(vc) as a state-time call when vc is a varying covariate.
+    # Also recognize S(vc) as a state-time call when vc is a varying covariate.
     vc_time_args = Set{Symbol}()
     let all_state_syms = Set(vcat(state_names, signal_names)),
         vc_syms_early = Set(varying_cov_names)

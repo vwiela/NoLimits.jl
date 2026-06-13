@@ -102,7 +102,7 @@ Posterior probabilities of hidden states given the length-M observation vector
 `y` (which may contain `missing` entries). Uses all non-missing outcomes jointly.
 """
 function posterior_hidden_states(hmm::MVContinuousTimeDiscreteStatesHMM, y::AbstractVector)
-    # Tuple-fused per-state weighting/normalisation (bit-identical op order);
+    # Tuple-fused per-state weighting/normalization (bit-identical op order);
     # the matrix-exponential propagation remains the dominant cost.
     p_hidden = probabilities_hidden_states(hmm)
     dists = hmm.emission_dists
@@ -110,6 +110,19 @@ function posterior_hidden_states(hmm::MVContinuousTimeDiscreteStatesHMM, y::Abst
     u = map((pi, d) -> pi * exp(_mv_emission_logpdf(d, y)), pt, dists)
     su = sum(u)
     return [ui / su for ui in u]
+end
+
+# Combined accessor sharing the single matrix-exponential propagation between the
+# likelihood and posterior; reuses the EXACT per-state ops above (bit-identical).
+function _hmm_logpdf_and_posterior(hmm::MVContinuousTimeDiscreteStatesHMM,
+        y::AbstractVector)
+    p_hidden = probabilities_hidden_states(hmm)
+    dists = hmm.emission_dists
+    pt = _hmm_probs_tuple(p_hidden, dists)
+    lp = _hmm_logsumexp(map((pi, d) -> log(pi) + _mv_emission_logpdf(d, y), pt, dists))
+    u = map((pi, d) -> pi * exp(_mv_emission_logpdf(d, y)), pt, dists)
+    su = sum(u)
+    return lp, [ui / su for ui in u]
 end
 
 # ---------------------------------------------------------------------------

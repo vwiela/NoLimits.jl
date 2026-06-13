@@ -76,6 +76,34 @@ function posterior_hidden_states(dist::CoarsedObservedStatesMarkovModel, y)
         eltype(probabilities_hidden_states(dist.base_dist)), dist.base_dist.n_states)
 end
 
+# Combined accessor sharing the single base-distribution propagation between logpdf
+# and posterior; reuses the EXACT ops of the methods above (bit-identical). Shares
+# the matrix-exponential when the base is a continuous-time model.
+function _hmm_logpdf_and_posterior(
+        dist::CoarsedObservedStatesMarkovModel, y::AbstractVector)
+    idxs = _omm_coarsed_observation_indices(dist.base_dist.state_labels, y)
+    p = probabilities_hidden_states(dist.base_dist)
+    T = eltype(p)
+    post = zeros(T, dist.base_dist.n_states)
+    isempty(idxs) && return (-Inf, post)
+    mass = zero(T)
+    for idx in idxs
+        mass += p[idx]
+    end
+    (isfinite(mass) && mass > zero(T)) || return (-Inf, post)
+    inv_mass = inv(mass)
+    for idx in idxs
+        post[idx] = p[idx] * inv_mass
+    end
+    return (log(mass), post)
+end
+
+function _hmm_logpdf_and_posterior(dist::CoarsedObservedStatesMarkovModel, y)
+    _omm_coarsed_observation_indices(dist.base_dist.state_labels, y)
+    return (-Inf,
+        zeros(eltype(probabilities_hidden_states(dist.base_dist)), dist.base_dist.n_states))
+end
+
 function Distributions.logpdf(dist::CoarsedObservedStatesMarkovModel, y::AbstractVector)
     idxs = _omm_coarsed_observation_indices(dist.base_dist.state_labels, y)
     isempty(idxs) && return -Inf

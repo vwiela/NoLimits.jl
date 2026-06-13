@@ -138,7 +138,7 @@ p_ms
 
 Comparing fitted trajectories from different estimation methods or model specifications is a natural step in model selection. `plot_fits_comparison` overlays trajectories from multiple fit results on the same individual panels, making differences in structural predictions immediately visible.
 
-For vectors, legend labels are assigned as `Model 1`, `Model 2`, and so on in input order. For `NamedTuple` and `Dict` inputs, the provided keys serve as legend labels. Per-model line styles can be customized through `PlotStyle(comparison_line_styles=Dict(...))`; `PlotStyle` is the shared styling object accepted by all plotting functions (colours, line styles, layout) - see its docstring in the API reference for the full set of fields. The `individuals_idx` keyword (here `1:2`) restricts the panels to the selected individuals.
+For vectors, legend labels are assigned as `Model 1`, `Model 2`, and so on in input order. For `NamedTuple` and `Dict` inputs, the provided keys serve as legend labels. Per-model line styles can be customized through `PlotStyle(comparison_line_styles=Dict(...))`; `PlotStyle` is the shared styling object accepted by all plotting functions (colors, line styles, layout) - see its docstring in the API reference for the full set of fields. The `individuals_idx` keyword (here `1:2`) restricts the panels to the selected individuals.
 
 ```@example plotting_overview
 saem_quick = NoLimits.SAEM(;
@@ -218,7 +218,7 @@ The `residual` keyword chooses which residual metric to plot (one of the columns
 
 ## Visual predictive check
 
-The visual predictive check (VPC) is a widely used diagnostic in longitudinal modelling. It evaluates a model's ability to reproduce the distribution of observed data through simulation. `plot_vpc` generates predictive envelopes from repeated simulations under the fitted model and overlays them on the observed data summaries. Agreement between the simulated envelopes and observed trends indicates that the model captures both the central tendency and the variability structure of the data.
+The visual predictive check (VPC) is a widely used diagnostic in longitudinal modeling. It evaluates a model's ability to reproduce the distribution of observed data through simulation. `plot_vpc` generates predictive envelopes from repeated simulations under the fitted model and overlays them on the observed data summaries. Agreement between the simulated envelopes and observed trends indicates that the model captures both the central tendency and the variability structure of the data.
 
 ```@example plotting_overview
 p_vpc = plot_vpc(res; n_simulations=20, percentiles=[5, 50, 95])

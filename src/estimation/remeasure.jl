@@ -641,7 +641,7 @@ function build_re_measure_from_batch(
 end
 
 # ---------------------------------------------------------------------------
-# CenteredREMeasure: AGHQ measure centred at EBE mode b* with local curvature
+# CenteredREMeasure: AGHQ measure centered at EBE mode b* with local curvature
 # ---------------------------------------------------------------------------
 
 """
@@ -649,8 +649,8 @@ end
 
 Adaptive Gauss-Hermite Quadrature (AGHQ) measure for a batch of random effects.
 
-Unlike `GaussianRE` (which centres nodes at the prior mean μ), this measure
-centres nodes at the empirical-Bayes mode **b***, scaled by
+Unlike `GaussianRE` (which centers nodes at the prior mean μ), this measure
+centers nodes at the empirical-Bayes mode **b***, scaled by
 **S = chol(-H)^{-1}** where H is the Hessian of log p(b | y, θ) at b*.
 
 The change-of-variables correction is

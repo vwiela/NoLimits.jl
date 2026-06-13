@@ -1,25 +1,17 @@
 # Markov Models in NoLimits.jl: Observed, Hidden, Coarsed, and Pathsum
 
-Multi-state models are a natural framework for data in which an individual, system, or process moves between a finite number of discrete states over time. Rather than treating repeated observations as isolated outcomes, these models focus on the transitions between states: remaining where one is, moving forward, recovering, relapsing, or entering an absorbing state. This makes them useful across many settings, including disease progression, reliability analysis, behavioral processes, event history data, and longitudinal categorical outcomes.
+Multi-state models describe a process moving between a finite set of discrete states over time, focusing on the transitions — staying, progressing, recovering, relapsing, or being absorbed. Under the Markov property (the future depends only on the current state) the transition structure stays interpretable and tractable, and covariates, time, and random effects can shape it. This tutorial specifies and estimates four related Markov models in NoLimits:
 
-A common simplifying assumption is the Markov property: conditional on the current state, the future evolution of the process does not depend on the full past history. In practice, this assumption is often a useful modeling compromise. It captures the local dependence that is most directly observed in longitudinal state data, while keeping the transition structure interpretable and statistically tractable. Covariates, time effects, and subject-level random effects can then be used to explain differences in transition behavior across individuals or experimental units.
-
-In this tutorial, you will use NoLimits.jl to specify and estimate several Markov-type models for longitudinal state data. The examples illustrate how the same general idea - modeling movement through a discrete state space - can be adapted to different observation schemes and assumptions. We will consider four related models: 
-
-1. An observed Markov model, where the state sequence is directly measured; 
-2. A hidden Markov model, where the observed data are noisy proxies for an underlying latent state process; 
-3. A Markov model for set-valued observations, where each observation may correspond to multiple possible states; 
-4. An acyclic continuous-time Markov model, where the absence of cycles allows transition probabilities to be computed efficiently using the matrix exponential.
-
-Together, these examples show how Markov models can be used in NoLimits.jl to represent discrete dynamic systems, accommodate imperfect or partial state information, and move between discrete-time and continuous-time formulations.
+1. an **observed** Markov model, where the state sequence is measured directly;
+2. a **hidden** Markov model (HMM), where observations are noisy proxies for a latent state;
+3. a **coarsed** model, where each observation is a set of possible states;
+4. an **acyclic continuous-time** model, where the absence of cycles lets transition probabilities be computed by a fast path-sum.
 
 ## What You Will Learn
 
-By the end of this tutorial, you will be able to:
-
-- **Build** a Markov model in discrete and continuous time.
-- **Configure** the emission setup based on your modelling assumptions.
-- **Fit** DT-HMM and CT-HMM models in NoLimits to externally generated data.
+- Build Markov models in discrete and continuous time.
+- Configure the emission setup for your modeling assumptions.
+- Fit DT- and CT-HMM models to externally generated data.
 
 ## Step 0: Setup and Data generation
 
@@ -36,7 +28,7 @@ Random.seed!(2026)
 
 ### Define Relevant Model Components
 
-We use a 3-state setup as in the example scripts. To keep interpretation clear, we separate the components:
+We use a 3-state setup and separate the components:
 
 - `P_true`: discrete-time transition matrix for one-step transitions.
 - `Q_true`: continuous-time generator matrix for rate-based transitions across arbitrary `dt`.
@@ -71,7 +63,7 @@ B_true = [
 
 ### Generate Synthetic Data
 
-In this tutorial, data simulation is done manually with the following stpes:
+Data is simulated manually:
 
 - initial hidden-state draw from `pi_true`,
 - hidden-state transition draw from `P_true` (or `exp(Q_true*dt)`),
@@ -196,7 +188,7 @@ uq_par = uq = NoLimits.compute_uq(
 NoLimits.summarize(uq_par)
 ```
 
-**Note:** The parameters are named by the macro `@fixedEffects` based on the given parametrization and name. In this example the stick-breaking transform is applied toe ach row of the transition matrix, yielding a direct fit of the first two parameters in that row and the third is indirectly defined by the constrained, that row-sums are equal to one.
+**Note:** Parameters are named by `@fixedEffects` from the parametrization and name. The stick-breaking transform applies to each row of the transition matrix, fitting the first two entries per row directly; the third is determined by the row-sum-to-one constraint.
 
 ## Step 2: Fit a Continuous-Time HMM in NoLimits
 
@@ -394,9 +386,7 @@ This notebook focuses on fixed-effects HMMs for clarity, but the same NoLimits b
 - multivariate emissions
 - etc.
 
-Below is an example using covariate dependent transition rates on log-scale and emission with logistic parametrization.
-
-Using random effects also requires a different estimation method such as Laplace, SAEM or MCEM.
+Below is an example with covariate-dependent transition rates on the log scale and logistic-parametrized emissions. Random effects also require a marginal-likelihood estimator — [Laplace](../estimation/laplace.md), [SAEM](../estimation/saem.md), or [MCEM](../estimation/mcem.md).
 ```julia
 model_custom = @Model begin
     @covariates begin

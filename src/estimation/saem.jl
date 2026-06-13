@@ -94,7 +94,7 @@ end
 # next_idx: 1-based next-write position (= head when buffer is full).
 # Invariant: active slots in age order are head, head+1, ..., head+len-1 (all mod capacity,
 # 1-based). After each push, entries whose SA weight falls below q_epsilon are pruned from
-# the oldest end (subject to the q_min floor). Retained weights are normalised in _saem_Q.
+# the oldest end (subject to the q_min floor). Retained weights are normalized in _saem_Q.
 mutable struct _SAEMSampleStore
     weights::Vector{Float64}                          # [slot] weight, preallocated
     snaps::Vector{Vector{Vector{Float64}}}            # [slot][batch] re-values, preallocated
@@ -326,13 +326,13 @@ end
            ebe_rescue_max_rounds, ebe_rescue_grad_tol, ebe_rescue_multistart_sampling,
            lb, ub) <: FittingMethod
 
-Stochastic Approximation Expectation-Maximisation for random-effects models. SAEM
+Stochastic Approximation Expectation-Maximization for random-effects models. SAEM
 maintains a stochastic approximation of the sufficient statistics using a decreasing
-step-size sequence; the M-step updates the fixed effects via gradient-based optimisation
+step-size sequence; the M-step updates the fixed effects via gradient-based optimization
 or closed-form updates (when `builtin_stats` is enabled).
 
 # Keyword Arguments
-- `optimizer`: M-step Optimization.jl optimiser. Defaults to `LBFGS` with backtracking.
+- `optimizer`: M-step Optimization.jl optimizer. Defaults to `LBFGS` with backtracking.
 - `optim_kwargs::NamedTuple = (; iterations=10, g_abstol=1e-4, f_reltol=1e-6)`: keyword
   arguments for the M-step `solve`. The defaults cap the inner LBFGS at 10 iterations
   and convergence tolerances (max-norm gradient < 1e-4, relative function improvement
@@ -350,7 +350,7 @@ or closed-form updates (when `builtin_stats` is enabled).
     the indices of batches to update. Can be a plain function or a callable struct (a
     mutable struct with a matching `call` method, useful for stateful schedules).
     Example: a struct that cycles through all batches in successive windows of 100.
-- `warm_start::Bool = true`: initialise the sampler from the previous iteration's modes.
+- `warm_start::Bool = true`: initialize the sampler from the previous iteration's modes.
 - `verbose::Bool = false`: print per-iteration diagnostics.
 - `progress::Bool = true`: show a progress bar.
 - `mcmc_steps`: number of MCMC sweeps per E-step. Defaults to `1` for `SaemixMH` (one
@@ -361,8 +361,8 @@ or closed-form updates (when `builtin_stats` is enabled).
 - `q_store_epsilon::Float64 = 1e-10`: weight threshold for the adaptive memory policy.
   After each push, snapshots whose SA weight falls below this value are pruned from the
   oldest end of the buffer (subject to `q_store_min`). The retained weights are
-  renormalised to sum to 1 before evaluating Q, so Q is scale-invariant to pruning.
-  During the γ=1 stabilisation phase all previous snapshots are immediately pruned,
+  renormalized to sum to 1 before evaluating Q, so Q is scale-invariant to pruning.
+  During the γ=1 stabilization phase all previous snapshots are immediately pruned,
   keeping only the current iteration's sample. Only applies to the numeric Q path;
   if `suffstats` is provided this parameter has no effect (a warning is emitted if set
   to a non-default value).
@@ -380,11 +380,11 @@ or closed-form updates (when `builtin_stats` is enabled).
 - `q_from_stats`: custom Q-function from sufficient statistics, or `nothing`.
 - `mstep_closed_form`: custom closed-form M-step function, or `nothing`.
 - `builtin_stats`: `:auto`, `:on`, or `:off`; controls use of built-in Gaussian statistics.
-- `builtin_mean`: `:none`, `:additive`, or `:all`; controls built-in mean parameterisation.
+- `builtin_mean`: `:none`, `:additive`, or `:all`; controls built-in mean parameterization.
 - `resid_var_param::Symbol = :σ`: fixed-effect name for the residual standard deviation.
 - `re_cov_params::NamedTuple = NamedTuple()`: mapping of RE name to covariance parameter.
 - `re_mean_params::NamedTuple = NamedTuple()`: mapping of RE name to mean parameter.
-- `ebe_optimizer`, `ebe_optim_kwargs`, `ebe_adtype`, `ebe_grad_tol`: EBE inner optimiser.
+- `ebe_optimizer`, `ebe_optim_kwargs`, `ebe_adtype`, `ebe_grad_tol`: EBE inner optimizer.
 - `ebe_multistart_n`, `ebe_multistart_k` (default 1), `ebe_multistart_max_rounds`,
   `ebe_multistart_sampling`: multistart settings for EBE mode computation.
 - `ebe_rescue_on_high_grad` (default `false`), `ebe_rescue_*`: rescue multistart settings
@@ -401,7 +401,7 @@ or closed-form updates (when `builtin_stats` is enabled).
   log-likelihood at the current RE sample. Each retry re-runs the MCMC sampler for
   the offending batches only (using `retry_mcmc_steps` steps), then overwrites the
   capacity-1 ring buffer slot. If all retries are exhausted the M-step is skipped for
-  that iteration (existing behaviour). Has no effect when `mstep_sa_on_params=false`.
+  that iteration (existing behavior). Has no effect when `mstep_sa_on_params=false`.
 - `retry_mcmc_steps::Int = 1`: number of MCMC steps per retry attempt. Kept small
   (default 1) since the goal is merely to escape the bad RE value, not to fully mix.
 """
@@ -2378,7 +2378,7 @@ function _saem_batches(update_schedule, nbatches::Int, iter::Int, rng::AbstractR
     return _saem_batches!(Vector{Int}(), update_schedule, nbatches, iter, rng)
 end
 
-# Sum of active snapshot weights (always Float64; used for renormalisation in _saem_Q).
+# Sum of active snapshot weights (always Float64; used for renormalization in _saem_Q).
 function _saem_store_weight_sum(store::_SAEMSampleStore)
     s = 0.0
     h = store.head
@@ -2400,7 +2400,7 @@ function _saem_Q(dm::DataModel,
         anneal_sds::NamedTuple = NamedTuple())
     total = zero(eltype(θ))
     store.len == 0 && return total
-    # Compute weight sum once (Float64) for renormalisation; guard against degenerate store.
+    # Compute weight sum once (Float64) for renormalization; guard against degenerate store.
     weight_sum = _saem_store_weight_sum(store)
     weight_sum < 1e-300 && return total
     # Capture head/len as locals — they must not change during Q evaluation.
@@ -2930,7 +2930,7 @@ function _fit_model(dm::DataModel, method::SAEM, args...;
     has_custom_closed_form = method.saem.suffstats !== nothing &&
                              method.saem.mstep_closed_form !== nothing
     # Detect Q2-only free parameters (appear only in RE distributions, never in obs-side blocks).
-    # These are optimised in a cheap separate M-step that skips ODE evaluation entirely.
+    # These are optimized in a cheap separate M-step that skips ODE evaluation entirely.
     q2_base_free_names = let p = _partition_q1_q2_names(dm.model, base_free_names)
         p.q2
     end
@@ -3041,7 +3041,7 @@ function _fit_model(dm::DataModel, method::SAEM, args...;
 
     # O2+O4+O5: preallocated ring buffer for SA sample history
     # When mstep_sa_on_params=true the M-step reads only b_current, so the ring buffer is
-    # never used for optimization — capacity=1 minimises memory while keeping Q_new valid.
+    # never used for optimization — capacity=1 minimizes memory while keeping Q_new valid.
     _store_capacity = method.saem.mstep_sa_on_params ? 1 : method.saem.q_store_max
     sample_store = _init_saem_sample_store(_store_capacity, method.saem.q_store_epsilon,
         min(method.saem.q_store_min, _store_capacity), batch_infos)
@@ -3279,7 +3279,7 @@ function _fit_model(dm::DataModel, method::SAEM, args...;
         axs_full = axs_full_iter
 
         # ── Q2 numerical M-step ──────────────────────────────────────────────
-        # Optimise parameters that appear only in RE distribution expressions.
+        # Optimize parameters that appear only in RE distribution expressions.
         # No ODE calls needed — objective is purely log p(η | θ_Q2).
         let q2_free_now = [n for n in q2_base_free_names if n ∉ keys(iter_constants)]
             if !isempty(q2_free_now)

@@ -38,7 +38,7 @@ end
     CVResult
 
 Aggregate cross-validation results. `obs_scores` combines all folds with a
-`:fold` column. `mean_test_loglikelihood` and `std_test_loglikelihood` summarise
+`:fold` column. `mean_test_loglikelihood` and `std_test_loglikelihood` summarize
 predictive performance across folds.
 """
 struct CVResult
@@ -376,7 +376,7 @@ end
 # Prior-mean RE value for an unseen test individual, shaped to match `ref` (a
 # scalar or vector component of a reference η). Tries the distribution mean, then
 # the median, then zero — mirroring `_re_start_value`, so non-zero-mean RE priors
-# (Beta, Gumbel, LogNormal, …) are honoured rather than collapsed to zero.
+# (Beta, Gumbel, LogNormal, …) are honored rather than collapsed to zero.
 function _re_prior_mean_or_zero(dist, ref)
     v = try
         Distributions.mean(dist)
@@ -444,7 +444,7 @@ function _cv_evaluate_ebe(dm_train, dm_test, res_train, θu, ll_cache_test, loss
     return _cv_collect_obs(dm_test, θu, η_test, ll_cache_test, loss)
 end
 
-# MC path: marginalise over the conditional (seen) or prior (unseen) using S MC draws.
+# MC path: marginalize over the conditional (seen) or prior (unseen) using S MC draws.
 # Aggregates per-obs log-likelihoods via logsumexp and predicted means via arithmetic mean.
 function _cv_evaluate_mc(dm_train, dm_test, res_train, θu, ll_cache_test, loss,
         seen_re_mode, unseen_re_mode, n_mc_samples, rng, re_names,

@@ -71,7 +71,7 @@ MCMC-based E-step for [`MCEM`](@ref). Wraps a Turing.jl-compatible sampler.
 - `sampler`: Turing-compatible sampler. Defaults to `NUTS(0.75)`.
 - `turing_kwargs::NamedTuple`: forwarded to `Turing.sample`.
 - `sample_schedule`: samples per E-step — `Int`, `Vector{Int}`, or `Function(iter)->Int`.
-- `warm_start::Bool = true`: initialise sampler from previous iteration's modes.
+- `warm_start::Bool = true`: initialize sampler from previous iteration's modes.
 """
 struct MCEM_MCMC{S, K, SS} <: AbstractMCEMEStep
     sampler::S
@@ -93,7 +93,7 @@ end
 Importance Sampling E-step for [`MCEM`](@ref).
 
 Draws `n_samples` random-effect vectors from a proposal distribution `q(b)` and
-reweights them by `log p(y, b | θ_k) - log q(b)` to form a self-normalised
+reweights them by `log p(y, b | θ_k) - log q(b)` to form a self-normalized
 Monte Carlo approximation of the Q-function.
 
 # Keyword Arguments
@@ -162,12 +162,12 @@ end
            ebe_rescue_multistart_k, ebe_rescue_max_rounds, ebe_rescue_grad_tol,
            ebe_rescue_multistart_sampling, lb, ub) <: FittingMethod
 
-Monte Carlo Expectation-Maximisation for random-effects models. At each EM iteration the
-E-step draws random effects; the M-step maximises the Monte Carlo Q-function over the
+Monte Carlo Expectation-Maximization for random-effects models. At each EM iteration the
+E-step draws random effects; the M-step maximizes the Monte Carlo Q-function over the
 fixed effects.
 
 # Keyword Arguments
-- `optimizer`: M-step Optimization.jl optimiser. Defaults to `LBFGS` with backtracking.
+- `optimizer`: M-step Optimization.jl optimizer. Defaults to `LBFGS` with backtracking.
 - `optim_kwargs::NamedTuple = (; iterations=50, g_abstol=1e-4, f_reltol=1e-6)`: keyword arguments for the M-step `solve`.
 - `adtype`: AD backend for the M-step. Defaults to `AutoForwardDiff()`.
 - `e_step`: E-step strategy. Either [`MCEM_MCMC`](@ref) or [`MCEM_IS`](@ref). When
@@ -175,7 +175,7 @@ fixed effects.
 - `sampler`: (legacy) Turing sampler; used when `e_step` is not provided.
 - `turing_kwargs::NamedTuple`: (legacy) forwarded to `Turing.sample`.
 - `sample_schedule::Int = 250`: (legacy) MCMC samples per E-step iteration.
-- `warm_start::Bool = true`: (legacy) initialise sampler from previous iteration's modes.
+- `warm_start::Bool = true`: (legacy) initialize sampler from previous iteration's modes.
 - `verbose::Bool = false`: print per-iteration diagnostics.
 - `progress::Bool = true`: show a progress bar.
 - `store_diagnostics::Bool = false`: store per-iteration parameter trajectories
@@ -186,7 +186,7 @@ fixed effects.
 - `rtol_theta`, `atol_theta`: relative/absolute convergence tolerance on fixed effects.
 - `rtol_Q`, `atol_Q`: relative/absolute convergence tolerance on the Q-function.
 - `consecutive_params::Int = 3`: consecutive iterations satisfying tolerance to converge.
-- `ebe_optimizer`, `ebe_optim_kwargs`, `ebe_adtype`, `ebe_grad_tol`: EBE inner optimiser.
+- `ebe_optimizer`, `ebe_optim_kwargs`, `ebe_adtype`, `ebe_grad_tol`: EBE inner optimizer.
 - `ebe_multistart_n`, `ebe_multistart_k` (default 1), `ebe_multistart_max_rounds`,
   `ebe_multistart_sampling`: multistart settings for EBE mode computation.
 - `ebe_rescue_on_high_grad` (default `false`), `ebe_rescue_multistart_n`,
@@ -823,11 +823,11 @@ function _is_gaussian_sample_batch(dm::DataModel,
     if nb == 0
         return (zeros(Float64, 0, n_samples), zeros(Float64, n_samples))
     end
-    # Memoise the per-block proposal densities across the sample loop — μ/C are
+    # Memoize the per-block proposal densities across the sample loop — μ/C are
     # invariant over the n_samples draws, but the scalar Normal (with its sqrt)
     # and the MvNormal (dense covariance copy + Cholesky inside the constructor)
     # were rebuilt once per draw per level. Built lazily on first use so the
-    # construction conditions (and any covariance-degeneracy behaviour) match the
+    # construction conditions (and any covariance-degeneracy behavior) match the
     # historical per-draw code exactly.
     q_scalar = Vector{Union{Nothing, Normal{Float64}}}(nothing, length(blocks))
     q_mv = Vector{Union{Nothing, MvNormal}}(nothing, length(blocks))
@@ -1486,7 +1486,7 @@ function _fit_model(dm::DataModel, method::MCEM, args...;
         θu_new = nothing
         Q_new = T0(Inf)
 
-        # Q2 sub-step: optimise parameters that appear only in RE distribution
+        # Q2 sub-step: optimize parameters that appear only in RE distribution
         # expressions (no ODE needed).  Results are folded into mstep_constants so the
         # Q1 optimizer below sees them as fixed.
         mstep_constants = constants

@@ -1,21 +1,17 @@
 # Mixed-Effects Tutorial 3: Neural Differential-Equation Components (SAEM)
 
-In many scientific domains - from systems biology to chemical engineering to ecology - we understand the broad structure of a dynamical system (e.g., compartments connected by transfer rates) but lack precise knowledge of every rate law or interaction term. Neural ordinary differential equations (Neural ODEs) offer a principled way to address this gap: they embed small neural networks directly inside an ODE system, allowing the data to shape the functional forms that mechanistic reasoning alone cannot specify. Crucially, this approach preserves the interpretable compartmental structure while letting learned components capture the unknown nonlinearities.
-
-In this tutorial, you will build a mixed-effects ODE model in which multiple neural-network components parameterize the ODE right-hand side, and fit it with the Stochastic Approximation Expectation-Maximization (SAEM) algorithm. By the end, you will have a working example of a hybrid mechanistic-neural model that accounts for between-subject variability through random effects on the network weights themselves.
+Often we know a dynamical system's structure — compartments and transfer pathways — but not the exact rate laws. Neural ODEs close that gap by embedding small neural networks inside the ODE right-hand side, letting the data shape the unknown functional forms while the compartmental structure stays interpretable. This tutorial builds a two-compartment Neural ODE for the Theophylline data and fits it with Stochastic Approximation Expectation-Maximization (SAEM), with subject-level random effects on the network weights so each individual gets a personalized version of the dynamics.
 
 ## Learning Goals
 
-By the end of this tutorial, you will be able to:
-
-- **Declare neural-network parameter blocks** (`NNParameters`) and wire them into an ODE system using the `@DifferentialEquation` macro.
-- **Couple network weights to subject-level random effects** via multivariate normal distributions, so that every individual in the dataset receives a personalized version of the dynamics.
-- **Fit the model using SAEM** with its default settings, which remain stable even when random-effect dimensions are high.
-- **Visualize and diagnose** the fitted trajectories and observation distributions.
+- Declare `NNParameters` blocks and wire them into `@DifferentialEquation`.
+- Couple network weights to subject-level random effects via `MvNormal`.
+- Fit with default SAEM, stable even at high random-effect dimension.
+- Diagnose the fitted trajectories and observation distributions.
 
 ## Step 1: Data Setup
 
-In this step, you will load and prepare the data. We use the classic Theophylline dataset, which records concentration-time profiles for 12 subjects after oral administration. Although this dataset originates from pharmacology, the underlying dynamics - a substance entering a depot compartment and transferring to a central compartment where it is observed and cleared - are a standard example of a two-compartment transfer system that arises across many fields, from tracer kinetics to nutrient cycling. You will reshape the data into a flat format where the initial amount `d` enters as a constant covariate.
+We use the Theophylline dataset (12 subjects, concentration over time) in a flat format where the dose `d` enters as a constant covariate — a two-compartment transfer system (depot → central → cleared).
 
 ```julia
 using NoLimits
@@ -71,14 +67,9 @@ first(df, 10)
 
 ## Step 2: Define the Neural ODE Mixed-Effects Model
 
-In this step, you will define the core model. The key idea is that instead of specifying closed-form rate functions (such as first-order kinetics), you let neural networks learn these functions directly from data. Each `NNParameters` block declares a small feedforward network whose flattened weights become part of the fixed-effects parameter vector. At evaluation time, a callable function (e.g., `NNA1`) reconstructs the network from its weight vector and evaluates it - so you can use it inside `@DifferentialEquation` just like any other function.
+Instead of closed-form rate laws, neural networks learn the rate functions from data. Each `NNParameters` block declares a small feedforward network whose flattened weights join the fixed-effects vector and expose a callable (e.g. `NNA1`) usable inside `@DifferentialEquation` (see [function approximators](../model-building/universal-function-approximators.md)). Four networks drive the two-compartment system: `fA1`/`fA2` for the depot, `fC1`/`fC2` for the central compartment.
 
-The ODE right-hand side uses four neural components arranged in a two-compartment transfer system:
-
-- `fA1(t)` and `fA2(t)` govern the dynamics of the depot (input) compartment.
-- `fC1(t)` and `fC2(t)` govern the dynamics of the central (observed) compartment.
-
-To capture between-subject variability, each network's weight vector is paired with a subject-level random-effect vector (`etaA1`, `etaA2`, `etaC1`, `etaC2`) drawn from a `MvNormal` distribution centered on the population weights. This means every individual effectively receives their own personalized network: the population learns shared structure, while the random effects allow individual departures.
+Each network's weights are paired with a subject-level random-effect vector (`etaA1`, `etaA2`, `etaC1`, `etaC2`) drawn from an `MvNormal` centered on the population weights, so every individual gets a personalized network around shared population structure.
 
 ```julia
 using NoLimits
@@ -150,9 +141,9 @@ model = set_solver_config(
 )
 ```
 
-Before moving on, inspect the model structure to verify that all blocks were assembled correctly.
-
 ### Model Summary
+
+`summarize` confirms the blocks assembled correctly:
 
 ```julia
 model_summary = NoLimits.summarize(model)
@@ -226,7 +217,7 @@ Helper functions
 
 ## Step 3: Build the `DataModel` and Configure SAEM
 
-In this step, you will pair the model with the data by constructing a `DataModel`, then configure the SAEM algorithm. SAEM alternates between sampling random effects conditional on the current parameter estimates (the E-step) and updating population parameters (the M-step). Here we use the default configuration, `NoLimits.SAEM()`. With its defaults, SAEM draws random effects with the adaptive Metropolis sampler (`SaemixMH`) in the E-step and updates the population parameters with a stochastic-approximation (Robbins-Monro) M-step. No special configuration is required even though the random-effect dimension is high here, with four separate network weight vectors per subject. Running with defaults keeps the example simple and demonstrates that the out-of-the-box configuration is sufficient for this hybrid neural-ODE model.
+After building the `DataModel`, we fit with default SAEM (`NoLimits.SAEM()`): an adaptive-Metropolis E-step samples the random effects, a stochastic-approximation (Robbins-Monro) M-step updates the population parameters (see [SAEM](../estimation/saem.md)). No tuning is needed despite the high random-effect dimension — four network-weight vectors per subject.
 
 ```julia
 dm = DataModel(model, df; primary_id=:ID, time_col=:t)
@@ -236,9 +227,9 @@ saem_method = NoLimits.SAEM()
 serialization = SciMLBase.EnsembleThreads()
 ```
 
-Before fitting, review the data model summary to confirm that individuals, covariates, and grouping structures were parsed as expected.
-
 ### DataModel Summary
+
+Confirm individuals, covariates, and grouping structures:
 
 ```julia
 dm_summary = NoLimits.summarize(dm)
@@ -323,7 +314,7 @@ Per-random-effect summary
 
 ## Step 4: Fit the Model and Inspect Results
 
-You are now ready to run SAEM. With the default settings the algorithm iterates up to 300 times, drawing the random effects with the adaptive Metropolis sampler within each E-step. After fitting, you will extract the final objective value and the number of estimated parameters as an initial sanity check.
+With defaults, SAEM runs up to 300 iterations. We extract the final objective and parameter count as a sanity check.
 
 ```julia
 res_saem = fit_model(
@@ -344,7 +335,7 @@ res_saem = fit_model(
 (objective = -565.6734432525224, n_params = 29)
 ```
 
-For a more detailed summary of the fit - including parameter estimates and convergence diagnostics - call the `summarize` function.
+`summarize` gives parameter estimates and convergence diagnostics:
 
 ```julia
 fit_summary_saem = NoLimits.summarize(res_saem)
@@ -409,7 +400,7 @@ Empirical Bayes random effects summary (across RE levels)
 
 ## Step 5: Visualize Fitted Trajectories
 
-In this step, you will overlay the model predictions on the raw observations for the first two subjects. Plotting fitted trajectories against observed data provides an immediate visual assessment of model adequacy - you should see the neural ODE tracking the characteristic rise-and-decay pattern of the two-compartment transfer system, with subject-specific variation captured by the random effects.
+Overlaying predictions on the data for the first two subjects shows the neural ODE tracking the two-compartment rise-and-decay, with subject variation from the random effects.
 
 ```julia
 p_fit_saem = plot_fits(
@@ -429,7 +420,7 @@ p_fit_saem
 
 ## Step 6: Inspect the Observation Distribution
 
-As a final diagnostic, you will examine the implied observation distribution at a single data point for the first individual. This plot shows the full predictive distribution (not just the point estimate), which helps you assess whether the residual variance is well-calibrated and whether the model's uncertainty is reasonable.
+The predicted observation distribution at one data point for the first individual shows whether the residual variance is well-calibrated.
 
 ```julia
 p_obs_saem = plot_observation_distributions(
@@ -447,6 +438,6 @@ p_obs_saem
 
 ## Interpretation Notes
 
-- This modeling pattern combines mechanistic compartmental states with learned nonlinear rate functions inside a single mixed-effects ODE. The compartmental structure encodes known domain knowledge (e.g., mass conservation, transfer between compartments), while the neural networks fill in the unknown functional forms. This hybrid strategy is broadly applicable to any system where the topology is known but the governing laws are not fully specified.
-- Default SAEM (`NoLimits.SAEM()`) is sufficient here: the adaptive Metropolis E-step and stochastic-approximation M-step remain stable even though the random-effect dimension is large, as is typical with neural-network weight vectors. When defaults are not enough, SAEM also exposes closed-form Gaussian block updates through `builtin_stats=:closed_form` together with the `re_mean_params` mapping.
-- The structural settings used here (network width, ODE solver tolerances) are intentionally modest to keep the tutorial fast. For production analyses, consider widening the networks, increasing `maxiters` and the number of MCMC samples to ensure thorough convergence, and tightening the ODE solver tolerances.
+- **Hybrid mechanistic-neural ODE.** The compartments encode known structure (mass conservation, transfer); the networks fill in the unknown rate functions. This applies wherever the topology is known but the governing laws are not.
+- **Default SAEM suffices** even at high random-effect dimension. For finer control, SAEM also exposes closed-form Gaussian block updates via `builtin_stats=:closed_form` with the `re_mean_params` mapping.
+- **Settings are modest for speed.** For production, widen the networks, raise `maxiters` and sample counts, and tighten the ODE solver tolerances.

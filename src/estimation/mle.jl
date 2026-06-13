@@ -16,7 +16,7 @@ using OptimizationBBO
 Maximum Likelihood Estimation for models without random effects.
 
 # Keyword Arguments
-- `optimizer`: Optimization.jl-compatible optimiser. Defaults to `LBFGS` with backtracking
+- `optimizer`: Optimization.jl-compatible optimizer. Defaults to `LBFGS` with backtracking
   line search.
 - `optim_kwargs::NamedTuple = NamedTuple()`: keyword arguments forwarded to `Optimization.solve`
   (e.g. `maxiters`, `reltol`).
@@ -234,7 +234,7 @@ end
 """
     default_bounds_from_start(dm::DataModel; margin=1.0) -> (lower, upper)
 
-Generate symmetric box bounds on the transformed parameter scale centred at the
+Generate symmetric box bounds on the transformed parameter scale centered at the
 initial parameter values, with half-width `margin`.
 
 Useful for passing to `MLE(lb=lower, ub=upper)` when the model-declared bounds are

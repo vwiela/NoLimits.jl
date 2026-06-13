@@ -67,7 +67,7 @@ end
     init_params(tree::SoftTree, rng::AbstractRNG; init_weight_std=0.1,
                 init_bias_std=0.0, init_leaf_std=0.1) -> SoftTreeParams
 
-Initialise parameters for a [`SoftTree`](@ref).
+Initialize parameters for a [`SoftTree`](@ref).
 
 The no-`rng` overload fills all parameters with the given constant values.
 The `rng` overload draws parameters from zero-mean Normal distributions with the
@@ -77,12 +77,12 @@ specified standard deviations.
 - `tree::SoftTree`: the soft tree architecture.
 - `rng::AbstractRNG`: random-number generator (second overload only).
 
-# Keyword Arguments (constant initialisation)
+# Keyword Arguments (constant initialization)
 - `init_weight::Real = 0.0`: node weight initial value.
 - `init_bias::Real = 0.0`: node bias initial value.
 - `init_leaf::Real = 0.0`: leaf value initial value.
 
-# Keyword Arguments (random initialisation)
+# Keyword Arguments (random initialization)
 - `init_weight_std::Real = 0.1`: standard deviation for node weights.
 - `init_bias_std::Real = 0.0`: standard deviation for node biases.
 - `init_leaf_std::Real = 0.1`: standard deviation for leaf values.

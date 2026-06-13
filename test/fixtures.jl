@@ -4,7 +4,7 @@
 # fits in testset after testset: every distinct `@Model` recompiles the formula/
 # DE/logf closures + the estimator specialised to its types, and every fit
 # repeats that work. This module builds a small set of canonical model archetypes
-# and ONE fit per (archetype, method), built LAZILY and memoised, so the whole
+# and ONE fit per (archetype, method), built LAZILY and memoized, so the whole
 # suite shares them: a model is compiled once and each method is fit once, then
 # reused by the estimation / plotting / UQ / residual / summary / RE-diagnostic
 # tests instead of each rebuilding its own.

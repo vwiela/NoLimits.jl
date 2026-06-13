@@ -62,7 +62,7 @@ Return point estimates from a [`UQResult`](@ref).
 
 # Keyword Arguments
 - `scale::Symbol = :natural`: `:natural` for the untransformed scale, `:transformed`
-  for the optimisation scale.
+  for the optimization scale.
 - `as_component::Bool = true`: if `true`, return a `ComponentArray` keyed by parameter
   name; otherwise return a plain `Vector{Float64}`.
 """

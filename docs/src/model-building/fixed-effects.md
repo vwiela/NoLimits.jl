@@ -85,13 +85,13 @@ priors = get_priors(fe)
 lp = logprior(fe, theta_u)
 ```
 
-The behaviour of each scale option is summarized below:
+The behavior of each scale option is summarized below:
 
 - **`:log` scale** applies an elementwise log transform and is supported for `RealNumber`, `RealVector`, and `RealDiagonalMatrix`. For inherently positive quantities such as standard deviations, `:log` enforces positivity in transformed space; an explicit `lower` bound is therefore optional.
 - **`:logit` scale** applies the logit transform (`log(x/(1-x))`, clamped to `[-20, 20]`) and is supported for `RealNumber` and `RealVector`. Use this for parameters that must lie in `(0, 1)`, such as probabilities. The inverse is the sigmoid function. The initial value must be strictly between 0 and 1; the constructor errors otherwise. Bounds are enforced implicitly via clamping - no explicit `lower`/`upper` are needed.
 - **`:cholesky`** (for `RealPSDMatrix`) parameterizes the matrix via its Cholesky factor with log-transformed diagonal entries.
 - **`:expm`** (for `RealPSDMatrix`) parameterizes the matrix via matrix logarithm/exponential, storing only the upper-triangular elements.
-- **`:stickbreak`** (for `ProbabilityVector`) maps a k-probability simplex to k-1 unconstrained reals via the logistic stick-breaking transform. Each element νᵢ = pᵢ/(1-Σⱼ<ᵢ pⱼ) is passed through logit. The last probability is determined and not stored. Silently normalises the initial value if the sum is within 1e-6 of 1.
+- **`:stickbreak`** (for `ProbabilityVector`) maps a k-probability simplex to k-1 unconstrained reals via the logistic stick-breaking transform. Each element νᵢ = pᵢ/(1-Σⱼ<ᵢ pⱼ) is passed through logit. The last probability is determined and not stored. Silently normalizes the initial value if the sum is within 1e-6 of 1.
 - **`:stickbreakrows`** (for `DiscreteTransitionMatrix`) applies the stick-breaking transform independently to each row of an n×n row-stochastic matrix, yielding n*(n-1) unconstrained parameters.
 - **`:lograterows`** (for `ContinuousTransitionMatrix`) maps each off-diagonal entry of a rate matrix to its logarithm, yielding n*(n-1) unconstrained reals. The diagonal is always recomputed as minus the row sum and is never stored as a free parameter. Initial off-diagonal values must be non-negative.
 

@@ -43,10 +43,17 @@ function DifferentialEquationMeta(state_names::Vector{Symbol},
     DifferentialEquationMeta(state_names, signal_names, var_syms, fun_syms, Expr[])
 end
 
-struct DifferentialEquationBuilders
-    compile::Function
-    f!::Function
-    f::Function
+# Parameterized on the (concrete RuntimeGeneratedFunction) field types so the
+# RGF types propagate through `DEBundle{D,...}` (D = typeof(de)) into the Model /
+# DataModel type. Without the parameters these fields are abstract `::Function`,
+# so `get_de_compiler(de)(pc)` / `get_de_f!(de)` / `get_de_accessors_builder(de)`
+# return `Any` and every per-individual ODE solve dynamic-dispatches through them
+# (the whole `_ll_solve_de` body inferred `Any`). Construction (below) is
+# positional, so the parameters are inferred with no call-site change.
+struct DifferentialEquationBuilders{C, FB, F}
+    compile::C
+    f!::FB
+    f::F
 end
 
 """
@@ -56,10 +63,10 @@ Compiled representation of a `@DifferentialEquation` block. Stores state and sig
 names, in-place/out-of-place ODE functions, a parameter compiler, and an accessor
 builder for retrieving state/signal values from a solution object.
 """
-struct DifferentialEquation
+struct DifferentialEquation{B, A}
     meta::DifferentialEquationMeta
-    builders::DifferentialEquationBuilders
-    accessors_builder::Function
+    builders::B
+    accessors_builder::A
 end
 
 """

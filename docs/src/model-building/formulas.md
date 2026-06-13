@@ -212,7 +212,7 @@ DiscreteTimeObservedStatesMarkovModel(transition_matrix, initial_dist, state_lab
 The **third argument is `state_labels`** - a vector giving one label per state, whose
 length must equal the number of states (the size of `transition_matrix`). It maps state
 index → label and defaults to `[1, 2, ..., n_states]` if omitted. In the example below
-`[2, 3]` simply means the two states are labelled `2` and `3` (it is *not* a set of
+`[2, 3]` simply means the two states are labeled `2` and `3` (it is *not* a set of
 observed values).
 
 `state_labels` is distinct from the *coarsened observation* encoding used in the data. To
@@ -238,7 +238,7 @@ model = @Model begin
             DiscreteTimeObservedStatesMarkovModel(
                 P,
                 Categorical([0.5, 0.5]),  # prior over states at the previous time
-                [2, 3],                   # state_labels: the two states are labelled 2 and 3
+                [2, 3],                   # state_labels: the two states are labeled 2 and 3
             )
         )
     end
@@ -259,7 +259,7 @@ When each observation consists of several outcome variables that share the same 
 Two emission modes are supported:
 
 - **Conditionally independent**: the emission for state `k` is a `Tuple` of M scalar distributions, one per outcome. Missing entries in the observation vector are skipped (contribute zero log-likelihood).
-- **Joint `MvNormal`**: the emission for state `k` is a single `MvNormal`. Partial missings are handled by marginalising analytically over the observed indices.
+- **Joint `MvNormal`**: the emission for state `k` is a single `MvNormal`. Partial missings are handled by marginalizing analytically over the observed indices.
 
 ### Discrete time, conditionally independent emissions
 
@@ -331,7 +331,7 @@ model = @Model begin
 end
 ```
 
-Here `delta_t` is a time-varying covariate holding the elapsed time since the previous observation for each row. The `outcome` column must hold two-element vectors matching the dimension of the `MvNormal` emissions. Partially-missing vectors (e.g. `[1.2, missing]`) are handled by marginalising the `MvNormal` over the observed index.
+Here `delta_t` is a time-varying covariate holding the elapsed time since the previous observation for each row. The `outcome` column must hold two-element vectors matching the dimension of the `MvNormal` emissions. Partially-missing vectors (e.g. `[1.2, missing]`) are handled by marginalizing the `MvNormal` over the observed index.
 
 ## Related APIs
 

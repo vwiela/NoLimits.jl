@@ -46,7 +46,7 @@ A scalar real-valued fixed-effect parameter block.
 
 # Keyword Arguments
 - `name::Symbol = :unnamed`: parameter name (injected automatically by `@fixedEffects`).
-- `scale::Symbol = :identity`: reparameterisation applied during optimisation.
+- `scale::Symbol = :identity`: reparameterization applied during optimization.
   Must be one of `REAL_SCALES` (`:identity`, `:log`, `:logit`).
 - `lower::Real = -Inf`: lower bound on the natural scale (defaults to `EPSILON` when `scale=:log`).
 - `upper::Real = Inf`: upper bound on the natural scale.
@@ -166,9 +166,9 @@ end
     RealPSDMatrix(value; name, scale, prior, calculate_se) -> RealPSDMatrix
 
 A symmetric positive semi-definite (PSD) matrix parameter block, typically used
-to parameterise covariance matrices of random-effect distributions.
+to parameterize covariance matrices of random-effect distributions.
 
-The matrix is reparameterised during optimisation to ensure PSD constraints are
+The matrix is reparameterized during optimization to ensure PSD constraints are
 automatically satisfied.
 
 # Arguments
@@ -176,7 +176,7 @@ automatically satisfied.
 
 # Keyword Arguments
 - `name::Symbol = :unnamed`: parameter name (injected automatically by `@fixedEffects`).
-- `scale::Symbol = :cholesky`: reparameterisation. Must be one of `PSD_SCALES`
+- `scale::Symbol = :cholesky`: reparameterization. Must be one of `PSD_SCALES`
   (`:cholesky`, `:expm`).
 - `prior = Priorless()`: a `Distributions.Distribution` (e.g. `Wishart`) or `Priorless()`.
 - `calculate_se::Bool = false`: whether to include this parameter in standard-error calculations.
@@ -213,7 +213,7 @@ end
 A diagonal positive-definite matrix parameter block, stored as a vector of the
 diagonal entries. Useful for diagonal covariance matrices.
 
-All diagonal entries must be strictly positive. They are stored and optimised on the
+All diagonal entries must be strictly positive. They are stored and optimized on the
 log scale.
 
 # Arguments
@@ -222,7 +222,7 @@ log scale.
 
 # Keyword Arguments
 - `name::Symbol = :unnamed`: parameter name (injected automatically by `@fixedEffects`).
-- `scale::Symbol = :log`: reparameterisation. Must be in `DIAGONAL_SCALES` (`:log`).
+- `scale::Symbol = :log`: reparameterization. Must be in `DIAGONAL_SCALES` (`:log`).
 - `prior = Priorless()`: a `Distributions.Distribution` or `Priorless()`.
 - `calculate_se::Bool = false`: whether to include this parameter in standard-error calculations.
 """
@@ -264,7 +264,7 @@ end
 A parameter block that wraps the flattened parameters of a neural-network chain — either a
 Lux.jl `Chain` or a SimpleChains.jl `SimpleChain`.
 
-The resulting parameter is optimised as a flat real vector. Inside model blocks
+The resulting parameter is optimized as a flat real vector. Inside model blocks
 (`@randomEffects`, `@preDifferentialEquation`, `@formulas`) the network is called
 as `function_name(input, θ_slice)`, where `θ_slice` is the corresponding slice of
 the fixed-effects `ComponentArray`.
@@ -280,7 +280,7 @@ the fixed-effects `ComponentArray`.
 # Keyword Arguments
 - `name::Symbol = :unnamed`: parameter name (injected automatically by `@fixedEffects`).
 - `function_name::Symbol`: the name used to call the network in model blocks.
-- `seed::Integer = 0`: random seed for initialising the network parameters.
+- `seed::Integer = 0`: random seed for initializing the network parameters.
 - `prior = Priorless()`: `Priorless()`, a `Vector{Distribution}` of length equal to
   the number of parameters, or a multivariate `Distribution` with matching `length`.
 - `calculate_se::Bool = false`: whether to include this parameter in standard-error calculations.
@@ -322,7 +322,7 @@ end
 SimpleChains.jl backend for [`NNParameters`](@ref). A `SimpleChains.SimpleChain` already stores
 its parameters as a flat `Vector`, so they are kept as-is (no `Optimisers.destructure`/`reconstructor`
 round-trip); at runtime the network is evaluated directly as `chain(input, θ_slice)`. Parameters
-are initialised as `Float64`. This backend is ForwardDiff-compatible.
+are initialized as `Float64`. This backend is ForwardDiff-compatible.
 """
 function NNParameters(chain::SimpleChain; name::Symbol = :unnamed,
         function_name::Symbol, seed::Integer = 0,
@@ -354,11 +354,11 @@ base distribution. Parameters are stored as a flat real vector.
 
 # Keyword Arguments
 - `name::Symbol = :unnamed`: parameter name (injected automatically by `@fixedEffects`).
-- `seed::Integer = 0`: random seed for initialisation.
-- `init::Function`: weight initialisation function; defaults to `x -> sqrt(1/n_input) .* x`.
+- `seed::Integer = 0`: random seed for initialization.
+- `init::Function`: weight initialization function; defaults to `x -> sqrt(1/n_input) .* x`.
 - `base_dist`: base distribution for the flow. Defaults to `MvNormal(zeros(n_input), I)`.
   Can be any continuous multivariate distribution (e.g. `MvTDist(3, zeros(1), ones(1,1))`).
-  For ForwardDiff compatibility, `MvNormal` base distributions are automatically re-parameterised
+  For ForwardDiff compatibility, `MvNormal` base distributions are automatically re-parameterized
   with the correct element type; other distributions are used as-is.
 - `prior = Priorless()`: `Priorless()`, a `Vector{Distribution}`, or a multivariate `Distribution`.
 - `calculate_se::Bool = false`: whether to include this parameter in standard-error calculations.
@@ -413,10 +413,10 @@ end
 """
     SplineParameters(knots; name, function_name, degree, prior, calculate_se) -> SplineParameters
 
-A parameter block for a B-spline function whose coefficients are optimised as fixed effects.
+A parameter block for a B-spline function whose coefficients are optimized as fixed effects.
 
 The number of coefficients is determined by `length(knots) - degree - 1`. All coefficients
-are initialised to zero. Inside model blocks the spline is evaluated as
+are initialized to zero. Inside model blocks the spline is evaluated as
 `function_name(x, θ_slice)`.
 
 # Arguments
@@ -462,7 +462,7 @@ end
 """
     SoftTreeParameters(input_dim, depth; name, function_name, n_output, seed, prior, calculate_se) -> SoftTreeParameters
 
-A parameter block for a soft decision tree whose parameters are optimised as fixed effects.
+A parameter block for a soft decision tree whose parameters are optimized as fixed effects.
 
 The tree takes a real-valued vector of length `input_dim` and produces a vector of
 length `n_output`. Parameters are stored as a flat real vector. Inside model blocks
@@ -476,7 +476,7 @@ the tree is called as `function_name(x, θ_slice)`.
 - `name::Symbol = :unnamed`: parameter name (injected automatically by `@fixedEffects`).
 - `function_name::Symbol`: the name used to call the tree in model blocks.
 - `n_output::Integer = 1`: number of output values.
-- `seed::Integer = 0`: random seed for initialisation.
+- `seed::Integer = 0`: random seed for initialization.
 - `prior = Priorless()`: `Priorless()`, a `Vector{Distribution}`, or a multivariate `Distribution`.
 - `calculate_se::Bool = false`: whether to include this parameter in standard-error calculations.
 """
@@ -523,17 +523,17 @@ end
     ProbabilityVector(value; name, scale, prior, calculate_se) -> ProbabilityVector
 
 A probability vector parameter block: a vector of `k ≥ 2` non-negative entries
-summing to 1. Optimised via the logistic stick-breaking reparameterisation, which
+summing to 1. Optimized via the logistic stick-breaking reparameterization, which
 maps the simplex to `k-1` unconstrained reals.
 
 # Arguments
 - `value::AbstractVector{<:Real}`: initial probability vector. All entries must be
   non-negative and sum to 1 (within tolerance); if the sum differs by less than
-  `atol=1e-6`, the vector is silently normalised.
+  `atol=1e-6`, the vector is silently normalized.
 
 # Keyword Arguments
 - `name::Symbol = :unnamed`: parameter name (injected automatically by `@fixedEffects`).
-- `scale::Symbol = :stickbreak`: reparameterisation. Must be in `PROBABILITY_SCALES`.
+- `scale::Symbol = :stickbreak`: reparameterization. Must be in `PROBABILITY_SCALES`.
 - `prior = Priorless()`: a `Distributions.Distribution` or `Priorless()`.
 - `calculate_se::Bool = true`: whether to include this parameter in standard-error calculations.
 """
@@ -564,7 +564,7 @@ function ProbabilityVector(value::AbstractVector{<:Real};
     atol = T(1e-6)
     abs(s - one(T)) <= atol ||
         error("ProbabilityVector for parameter $(name) must sum to 1 (within 1e-6); got sum=$(s).")
-    v = v ./ s   # silent normalisation
+    v = v ./ s   # silent normalization
     return ProbabilityVector{T, typeof(v)}(name, v, scale, prior, calculate_se)
 end
 
@@ -572,16 +572,16 @@ end
     DiscreteTransitionMatrix(value; name, scale, prior, calculate_se) -> DiscreteTransitionMatrix
 
 A square row-stochastic matrix parameter block of size `n×n` (`n ≥ 2`). Each row
-is a probability vector and is independently reparameterised via the logistic
+is a probability vector and is independently reparameterized via the logistic
 stick-breaking transform, yielding `n*(n-1)` unconstrained reals.
 
 # Arguments
 - `value::AbstractMatrix{<:Real}`: initial row-stochastic matrix. Each row must be
-  non-negative and sum to 1 (within tolerance); rows are silently normalised if needed.
+  non-negative and sum to 1 (within tolerance); rows are silently normalized if needed.
 
 # Keyword Arguments
 - `name::Symbol = :unnamed`: parameter name (injected automatically by `@fixedEffects`).
-- `scale::Symbol = :stickbreakrows`: reparameterisation. Must be in `TRANSITION_SCALES`.
+- `scale::Symbol = :stickbreakrows`: reparameterization. Must be in `TRANSITION_SCALES`.
 - `prior = Priorless()`: a `Distributions.Distribution` or `Priorless()`.
 - `calculate_se::Bool = true`: whether to include this parameter in standard-error calculations.
 """
@@ -615,7 +615,7 @@ function DiscreteTransitionMatrix(value::AbstractMatrix{<:Real};
     atol = T(1e-6)
     all(abs.(row_sums .- one(T)) .<= atol) ||
         error("Each row of DiscreteTransitionMatrix for parameter $(name) must sum to 1 (within 1e-6); got row sums=$(vec(row_sums)).")
-    v = v ./ row_sums   # silent row-wise normalisation
+    v = v ./ row_sums   # silent row-wise normalization
     return DiscreteTransitionMatrix{T, typeof(v)}(name, v, scale, prior, calculate_se)
 end
 
@@ -628,7 +628,7 @@ The Q-matrix has:
 - Off-diagonal entries `Q[i,j] ≥ 0` (transition rates from state `i` to state `j`, `i ≠ j`).
 - Diagonal entries `Q[i,i] = -∑_{j≠i} Q[i,j]` (rows sum to zero).
 
-The `n*(n-1)` off-diagonal rates are optimised on the log scale (`:lograterows`), mapping
+The `n*(n-1)` off-diagonal rates are optimized on the log scale (`:lograterows`), mapping
 each rate to an unconstrained real via `log`. The diagonal is recomputed from the off-diagonals
 and is not an independent free parameter.
 
@@ -639,7 +639,7 @@ and is not an independent free parameter.
 
 # Keyword Arguments
 - `name::Symbol = :unnamed`: parameter name (injected automatically by `@fixedEffects`).
-- `scale::Symbol = :lograterows`: reparameterisation. Must be in `RATE_MATRIX_SCALES`.
+- `scale::Symbol = :lograterows`: reparameterization. Must be in `RATE_MATRIX_SCALES`.
 - `prior = Priorless()`: a `Distributions.Distribution` or `Priorless()`.
 - `calculate_se::Bool = true`: whether to include this parameter in standard-error calculations.
 """

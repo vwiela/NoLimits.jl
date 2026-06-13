@@ -45,7 +45,7 @@ implicit rejection (proposals outside the support yield `logpdf = -Inf`).
 - `adapt_start::Int = 50`: pooled sample count before Haario updates begin.
 - `init_scale::Float64 = 1.0`: multiplier on the prior-based initial proposal
   covariance.
-- `eps_reg::Float64 = 1e-6`: regularisation added to the diagonal of the
+- `eps_reg::Float64 = 1e-6`: regularization added to the diagonal of the
   proposal covariance to ensure positive-definiteness.
 
 # Usage
@@ -205,7 +205,7 @@ end
 # at runtime), forcing dynamic dispatch and an allocation on every call — these wrappers
 # sit in the per-coordinate MH proposal inner loop. Branching over the finite set of known
 # RE-type symbols lets each branch dispatch to a `Val`-*literal* method (a compile-time
-# constant), eliminating the dynamic `Val(s)` construction. Behaviour is identical: the
+# constant), eliminating the dynamic `Val(s)` construction. Behavior is identical: the
 # branch set is exactly the set of specialised `Val{:X}` methods, and any other symbol
 # falls through to the generic `::Val` identity method.
 @inline function _amh_bij_forward(s::Symbol, η)
@@ -288,7 +288,24 @@ end
 
 # Fallback: identity bijection, Jacobian = 1
 @inline _bij_log_jac_forward(::Val, z) = 0.0
-@inline _bij_log_jac_forward(s::Symbol, z) = _bij_log_jac_forward(Val(s), z)
+# Symbol entrypoint: branch over the known RE-type symbols so each dispatches to a
+# `Val`-literal method (compile-time constant) instead of materialising `Val(s)` from
+# a runtime Symbol (non-inferrable type → dynamic dispatch + boxing per IS sample).
+# Mirrors `_amh_bij_forward`/`_amh_bij_inverse`/`_amh_bij_log_jac`; behavior is
+# identical (the branch set is exactly the specialised `Val{:X}` methods; any other
+# symbol falls through to the generic `::Val` identity method via `Val(s)`).
+@inline function _bij_log_jac_forward(s::Symbol, z)
+    s === :Normal && return _bij_log_jac_forward(Val(:Normal), z)
+    s === :LogNormal && return _bij_log_jac_forward(Val(:LogNormal), z)
+    s === :Exponential && return _bij_log_jac_forward(Val(:Exponential), z)
+    s === :Beta && return _bij_log_jac_forward(Val(:Beta), z)
+    s === :MvNormal && return _bij_log_jac_forward(Val(:MvNormal), z)
+    s === :MvLogNormal && return _bij_log_jac_forward(Val(:MvLogNormal), z)
+    s === :MvLogitNormal && return _bij_log_jac_forward(Val(:MvLogitNormal), z)
+    s === :NormalizingPlanarFlow &&
+        return _bij_log_jac_forward(Val(:NormalizingPlanarFlow), z)
+    return _bij_log_jac_forward(Val(s), z)
+end
 
 # ---------------------------------------------------------------------------
 # Initial proposal covariance from prior distribution
@@ -422,7 +439,7 @@ function _amh_haario_update!(block::_REAdaptBlock, z::AbstractVector{<:Real},
     end
     if n >= max(adapt_start + 1, 2)
         λ = 2.38^2 / d
-        # Scale into C, then add the regulariser to the diagonal only — the
+        # Scale into C, then add the regularizer to the diagonal only — the
         # previous `eps_reg * Id` materialised a dense d×d identity per MH step.
         @. block.C = λ * block.S_run / (n - 1)
         for j in 1:d
@@ -453,7 +470,7 @@ function _amh_build_level_inds(info::_LaplaceBatchInfo, ri::Int,
 end
 
 # ---------------------------------------------------------------------------
-# State initialisation
+# State initialization
 # ---------------------------------------------------------------------------
 
 function _amh_init_state(dm::DataModel, info::_LaplaceBatchInfo,
@@ -478,7 +495,7 @@ function _amh_init_state(dm::DataModel, info::_LaplaceBatchInfo,
         dim = re_info.dim
         n_levels == 0 && continue
 
-        # Sample from prior to initialise b
+        # Sample from prior to initialize b
         for (li, _) in enumerate(levels)
             const_cov = dm.individuals[re_info.reps[li]].const_cov
             dists = dists_builder(θ_re, const_cov, model_funs, helpers)
@@ -517,7 +534,7 @@ function _amh_init_state(dm::DataModel, info::_LaplaceBatchInfo,
         lp_offset += n_levels
     end
 
-    # Initialise per-individual and per-level caches
+    # Initialize per-individual and per-level caches
     ind_ll, re_lp, logp = _amh_compute_full_ll(dm, info, θ_re, b_current,
         const_cache, cache, blocks,
         dists_builder, model_funs, helpers)
@@ -565,10 +582,9 @@ end
 # Recompute caches in-place after an M-step (θ changed, b_current unchanged).
 function _amh_recompute_ll_cache!(state::_AdaptiveMHState,
         dm::DataModel, info::_LaplaceBatchInfo,
-        θ::ComponentArray,
+        θ_re::ComponentArray,   # pre-symmetrized by the caller
         const_cache::LaplaceConstantsCache,
         cache::_LLCache)
-    θ_re = _symmetrize_psd_params(θ, dm.model.fixed.fixed)
     dists_builder = get_create_random_effect_distribution(dm.model.random.random)
     model_funs = cache.model_funs
     helpers = cache.helpers
@@ -603,12 +619,13 @@ end
 # ---------------------------------------------------------------------------
 
 function _amh_step!(state::_AdaptiveMHState, dm::DataModel,
-        info::_LaplaceBatchInfo, θ::ComponentArray,
+        info::_LaplaceBatchInfo, θ_re::ComponentArray,
         const_cache::LaplaceConstantsCache, cache::_LLCache,
         sampler::AdaptiveNoLimitsMH, rng::AbstractRNG;
         anneal_sds::NamedTuple = NamedTuple())
+    # θ_re is pre-symmetrized once per E-step by the caller (this used to re-copy the
+    # PSD blocks of θ on every one of the ~n_samples steps per E-step).
     b = state.b_current
-    θ_re = _symmetrize_psd_params(θ, dm.model.fixed.fixed)
     dists_builder = get_create_random_effect_distribution(dm.model.random.random)
     model_funs = cache.model_funs
     helpers = cache.helpers
@@ -767,10 +784,14 @@ function _mcem_sample_batch(dm::DataModel, info::_LaplaceBatchInfo,
     end
     n_samples = get(turing_kwargs, :n_samples, 100)
 
-    # Restore adaptation state or initialise from prior
+    # θ is constant across the whole E-step — symmetrize the PSD blocks ONCE here and
+    # thread θ_re into the per-step kernel and the resync (each re-copied θ otherwise).
+    θ_re = _symmetrize_psd_params(θ, dm.model.fixed.fixed)
+
+    # Restore adaptation state or initialize from prior
     state = if warm_start && last_params isa _AdaptiveMHState
         # θ has changed since last iteration — recompute ind_ll and re_lp in-place.
-        _amh_recompute_ll_cache!(last_params, dm, info, θ, const_cache, cache)
+        _amh_recompute_ll_cache!(last_params, dm, info, θ_re, const_cache, cache)
         last_params
     else
         _amh_init_state(dm, info, θ, re_names, const_cache, cache, sampler, rng)
@@ -779,7 +800,7 @@ function _mcem_sample_batch(dm::DataModel, info::_LaplaceBatchInfo,
     # Run the chain
     samples = Matrix{Float64}(undef, nb, n_samples)
     for i in 1:n_samples
-        _amh_step!(state, dm, info, θ, const_cache, cache, sampler, rng;
+        _amh_step!(state, dm, info, θ_re, const_cache, cache, sampler, rng;
             anneal_sds = anneal_sds)
         samples[:, i] .= state.b_current
     end

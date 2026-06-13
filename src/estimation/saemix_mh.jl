@@ -155,11 +155,10 @@ end
 function _saemixmh_init_indiv_ll!(indiv_ll::Vector{Float64},
         dm::DataModel,
         batch_info::_LaplaceBatchInfo,
-        θ::ComponentArray,
+        θ_re::ComponentArray,   # pre-symmetrized by the caller
         const_cache::LaplaceConstantsCache,
         cache::_LLCache,
         b::Vector{Float64})
-    θ_re = _symmetrize_psd_params(θ, dm.model.fixed.fixed)
     for (pos, i) in enumerate(batch_info.inds)
         η_ind = _build_eta_ind(dm, i, batch_info, b, const_cache, θ_re)
         indiv_ll[pos] = _loglikelihood_individual(dm, i, θ_re, η_ind, cache)
@@ -170,12 +169,11 @@ end
 function _saemixmh_level_plp!(level_plp::Vector{Float64},
         levels::Vector{_SaemixMHLevel},
         dm::DataModel,
-        θ::ComponentArray,
+        θ_re::ComponentArray,   # pre-symmetrized by the caller
         const_cache::LaplaceConstantsCache,
         cache::_LLCache,
         b::Vector{Float64};
         anneal_sds::NamedTuple = NamedTuple())
-    θ_re = _symmetrize_psd_params(θ, dm.model.fixed.fixed)
     dists_builder = get_create_random_effect_distribution(dm.model.random.random)
     model_funs = cache.model_funs
     helpers = cache.helpers
@@ -234,7 +232,7 @@ function _saemixmh_build_levels(dm::DataModel,
 end
 
 # Return the standard deviation in the bijected (z) space for a scalar RE level.
-# Used to initialise domega2 in the correct units — the bijection is what kernels
+# Used to initialize domega2 in the correct units — the bijection is what kernels
 # 2 and 3 now propose in, so the initial step size should live in that space.
 function _saemixmh_zspace_std(dist, re_type::Symbol)::Float64
     if re_type == :LogNormal
@@ -327,13 +325,14 @@ function _saemixmh_init_state(dm::DataModel,
         rw_init::Float64)
     nb = batch_info.n_b
     n_inds = length(batch_info.inds)
+    θ_re = _symmetrize_psd_params(θ, dm.model.fixed.fixed)
     levels = _saemixmh_build_levels(dm, batch_info, re_names)
     b = zeros(Float64, nb)
     _saemixmh_init_b!(b, levels, dm, θ, const_cache, cache, rng, re_names)
     indiv_ll = Vector{Float64}(undef, n_inds)
-    _saemixmh_init_indiv_ll!(indiv_ll, dm, batch_info, θ, const_cache, cache, b)
+    _saemixmh_init_indiv_ll!(indiv_ll, dm, batch_info, θ_re, const_cache, cache, b)
     level_plp = Vector{Float64}(undef, length(levels))
-    _saemixmh_level_plp!(level_plp, levels, dm, θ, const_cache, cache, b)
+    _saemixmh_level_plp!(level_plp, levels, dm, θ_re, const_cache, cache, b)
     domega2 = _saemixmh_init_domega2(levels, dm, θ, const_cache, cache, re_names, rw_init)
     # Scratch for multi-individual levels: sized to the largest level group so the
     # accept/reject step never allocates (was one Vector per proposal per step).
@@ -349,7 +348,7 @@ end
 function _saemixmh_kern1!(state::_SaemixMHState,
         dm::DataModel,
         batch_info::_LaplaceBatchInfo,
-        θ::ComponentArray,
+        θ_re::ComponentArray,   # pre-symmetrized once per E-step by the caller
         const_cache::LaplaceConstantsCache,
         cache::_LLCache,
         rng::AbstractRNG,
@@ -357,7 +356,6 @@ function _saemixmh_kern1!(state::_SaemixMHState,
         n_steps::Int,
         anneal_sds::NamedTuple)
     n_steps == 0 && return
-    θ_re = _symmetrize_psd_params(θ, dm.model.fixed.fixed)
     dists_builder = get_create_random_effect_distribution(dm.model.random.random)
     model_funs = cache.model_funs
     helpers = cache.helpers
@@ -441,7 +439,7 @@ end
 function _saemixmh_kern2!(state::_SaemixMHState,
         dm::DataModel,
         batch_info::_LaplaceBatchInfo,
-        θ::ComponentArray,
+        θ_re::ComponentArray,   # pre-symmetrized once per E-step by the caller
         const_cache::LaplaceConstantsCache,
         cache::_LLCache,
         rng::AbstractRNG,
@@ -451,7 +449,6 @@ function _saemixmh_kern2!(state::_SaemixMHState,
         stepsize_rw::Float64,
         anneal_sds::NamedTuple)
     n_steps == 0 && return
-    θ_re = _symmetrize_psd_params(θ, dm.model.fixed.fixed)
     dists_builder = get_create_random_effect_distribution(dm.model.random.random)
     model_funs = cache.model_funs
     helpers = cache.helpers
@@ -547,7 +544,7 @@ end
 function _saemixmh_kern3!(state::_SaemixMHState,
         dm::DataModel,
         batch_info::_LaplaceBatchInfo,
-        θ::ComponentArray,
+        θ_re::ComponentArray,   # pre-symmetrized once per E-step by the caller
         const_cache::LaplaceConstantsCache,
         cache::_LLCache,
         rng::AbstractRNG,
@@ -558,7 +555,6 @@ function _saemixmh_kern3!(state::_SaemixMHState,
         stepsize_rw::Float64,
         anneal_sds::NamedTuple)
     n_steps == 0 && return
-    θ_re = _symmetrize_psd_params(θ, dm.model.fixed.fixed)
     dists_builder = get_create_random_effect_distribution(dm.model.random.random)
     model_funs = cache.model_funs
     helpers = cache.helpers
@@ -682,7 +678,12 @@ function _mcem_sample_batch(dm::DataModel,
         return (zeros(eltype(θ), 0, 0), nothing, eltype(θ)[])
     end
 
-    # Initialise or warm-start state
+    # θ is constant across the whole E-step, so symmetrize the PSD blocks ONCE here
+    # and thread the result through the resync helpers and the per-sweep kernels
+    # (each used to recompute it; for PSD-Ω models that was a flat θ copy per call).
+    θ_re = _symmetrize_psd_params(θ, dm.model.fixed.fixed)
+
+    # Initialize or warm-start state
     state = if warm_start && last_params isa _SaemixMHState
         last_params
     else
@@ -692,19 +693,19 @@ function _mcem_sample_batch(dm::DataModel,
 
     # Re-sync indiv_ll and level_plp when θ has changed (e.g. M-step update).
     # We check by recomputing — cheap compared to MCMC itself.
-    _saemixmh_init_indiv_ll!(state.indiv_ll, dm, info, θ, const_cache, cache, state.b)
-    _saemixmh_level_plp!(state.level_plp, state.levels, dm, θ, const_cache, cache,
+    _saemixmh_init_indiv_ll!(state.indiv_ll, dm, info, θ_re, const_cache, cache, state.b)
+    _saemixmh_level_plp!(state.level_plp, state.levels, dm, θ_re, const_cache, cache,
         state.b; anneal_sds = anneal_sds)
 
     # Run n_samples sweeps: each sweep = n_kern1 kernel-1 steps + n_kern2 kernel-2 steps
     n_sweeps = max(1, get(turing_kwargs, :n_samples, 1))
     for _ in 1:n_sweeps
-        _saemixmh_kern1!(state, dm, info, θ, const_cache, cache, rng, re_names,
+        _saemixmh_kern1!(state, dm, info, θ_re, const_cache, cache, rng, re_names,
             sampler.n_kern1, anneal_sds)
-        _saemixmh_kern2!(state, dm, info, θ, const_cache, cache, rng, re_names,
+        _saemixmh_kern2!(state, dm, info, θ_re, const_cache, cache, rng, re_names,
             sampler.n_kern2, sampler.proba_mcmc, sampler.stepsize_rw,
             anneal_sds)
-        _saemixmh_kern3!(state, dm, info, θ, const_cache, cache, rng, re_names,
+        _saemixmh_kern3!(state, dm, info, θ_re, const_cache, cache, rng, re_names,
             sampler.n_kern3, outer_iter, sampler.proba_mcmc,
             sampler.stepsize_rw, anneal_sds)
     end

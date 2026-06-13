@@ -479,7 +479,7 @@ end
 
 # ForwardDiff-aware matrix exponential of a symmetric matrix (single-level Dual).
 # The generic eigen-based `exp(Symmetric)` has NaN / asymmetric ForwardDiff derivatives at
-# repeated eigenvalues (e.g. Ω = I, the typical optimisation/UQ point — the derivative of an
+# repeated eigenvalues (e.g. Ω = I, the typical optimization/UQ point — the derivative of an
 # eigen-based matrix function divides by eigenvalue gaps), and the Padé `exp(::Matrix)` has no
 # `Dual` method. So compute the value with the eigen-exp of the (Float64) symmetric value, and
 # each partial direction with the AD-safe block-2×2 Padé Fréchet derivative (`_expm_frechet`,

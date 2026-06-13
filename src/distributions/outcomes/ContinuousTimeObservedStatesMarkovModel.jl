@@ -117,6 +117,24 @@ function posterior_hidden_states(
     return zeros(eltype(probabilities_hidden_states(dist)), dist.n_states)
 end
 
+# Combined accessor sharing the single `exp(QΔt)` propagation between logpdf and
+# posterior; reuses the EXACT ops of the methods above (bit-identical).
+function _hmm_logpdf_and_posterior(dist::ContinuousTimeObservedStatesMarkovModel, y)
+    idx = _omm_scalar_observation_index(dist.state_labels, y)
+    p = probabilities_hidden_states(dist)
+    T = eltype(p)
+    post = zeros(T, dist.n_states)
+    idx === nothing && return (-Inf, post)
+    post[idx] = one(T)
+    return (log(p[idx]), post)
+end
+
+function _hmm_logpdf_and_posterior(
+        dist::ContinuousTimeObservedStatesMarkovModel, y::AbstractVector)
+    _omm_scalar_observation_index(dist.state_labels, y)
+    return (-Inf, zeros(eltype(probabilities_hidden_states(dist)), dist.n_states))
+end
+
 # --- Distributions.jl interface ---
 
 function Distributions.logpdf(dist::ContinuousTimeObservedStatesMarkovModel, y)
@@ -141,7 +159,7 @@ Distributions.pdf(dist::ContinuousTimeObservedStatesMarkovModel, y) = exp(logpdf
 # and `pdf(::UnivariateDistribution, ::Real)`. Real scalars and 1-d vectors
 # already dispatch to the methods above; these forward the remaining array
 # shapes to the untyped handler (via `invoke`, to avoid self-recursion) so
-# behaviour is identical — the observation pipeline never constructs them.
+# behavior is identical — the observation pipeline never constructs them.
 function Distributions.logpdf(dist::ContinuousTimeObservedStatesMarkovModel,
         y::AbstractArray{<:Real, 0})
     invoke(

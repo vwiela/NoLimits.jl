@@ -352,7 +352,7 @@ Returns a vector of probabilities `p` where `p[s]` is `P(State = s | Y = y)`.
 Uses Bayes' rule: `P(S | Y) ∝ P(Y | S) * P(S)`
 """
 function posterior_hidden_states(hmm::ContinuousTimeDiscreteStatesHMM, y::Real)
-    # Per-state weighting/normalisation fused into tuples (bit-identical op
+    # Per-state weighting/normalization fused into tuples (bit-identical op
     # order); the matrix-exponential propagation inside
     # `probabilities_hidden_states` remains the dominant cost.
     p_hidden = probabilities_hidden_states(hmm)
@@ -376,6 +376,20 @@ function Distributions.logpdf(hmm::ContinuousTimeDiscreteStatesHMM, y::Real)
     pt = _hmm_probs_tuple(p_hidden, dists)
     xs = map((pi, d) -> log(pi) + logpdf(d, y), pt, dists)
     return _hmm_logsumexp(xs)
+end
+
+# Combined accessor sharing the single `exp(QΔt)` propagation (the dominant per-row
+# cost) between the likelihood and the posterior. Reuses the EXACT per-state ops of
+# `logpdf` and `posterior_hidden_states` above, so the returned pair is bit-identical
+# to calling them separately.
+function _hmm_logpdf_and_posterior(hmm::ContinuousTimeDiscreteStatesHMM, y::Real)
+    p_hidden = probabilities_hidden_states(hmm)
+    dists = hmm.emission_dists
+    pt = _hmm_probs_tuple(p_hidden, dists)
+    lp = _hmm_logsumexp(map((pi, d) -> log(pi) + logpdf(d, y), pt, dists))
+    u = map((pi, d) -> pi * pdf(d, y), pt, dists)
+    su = sum(u)
+    return lp, [ui / su for ui in u]
 end
 
 function Distributions.rand(rng::AbstractRNG, hmm::ContinuousTimeDiscreteStatesHMM)

@@ -15,7 +15,7 @@ Maximum A Posteriori estimation for models without random effects.
 Requires prior distributions on at least one free fixed effect.
 
 # Keyword Arguments
-- `optimizer`: Optimization.jl-compatible optimiser. Defaults to `LBFGS` with backtracking
+- `optimizer`: Optimization.jl-compatible optimizer. Defaults to `LBFGS` with backtracking
   line search.
 - `optim_kwargs::NamedTuple = NamedTuple()`: keyword arguments forwarded to `Optimization.solve`
   (e.g. `maxiters`, `reltol`).

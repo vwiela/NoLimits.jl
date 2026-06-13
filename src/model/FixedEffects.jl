@@ -133,7 +133,7 @@ get_θ0_untransformed(fe::FixedEffects) = fe.values.θ0_untransformed
 """
     get_θ0_transformed(fe::FixedEffects) -> ComponentArray
 
-Return the initial parameter vector on the transformed (optimisation) scale.
+Return the initial parameter vector on the transformed (optimization) scale.
 """
 get_θ0_transformed(fe::FixedEffects) = fe.values.θ0_transformed
 
@@ -155,14 +155,14 @@ get_bounds_transformed(fe::FixedEffects) = fe.bounds.transformed
     get_transform(fe::FixedEffects) -> ForwardTransform
 
 Return the callable `ForwardTransform` that maps a natural-scale `ComponentArray`
-to the optimisation scale.
+to the optimization scale.
 """
 get_transform(fe::FixedEffects) = fe.transforms.forward
 
 """
     get_inverse_transform(fe::FixedEffects) -> InverseTransform
 
-Return the callable `InverseTransform` that maps an optimisation-scale `ComponentArray`
+Return the callable `InverseTransform` that maps an optimization-scale `ComponentArray`
 back to the natural scale.
 """
 get_inverse_transform(fe::FixedEffects) = fe.transforms.inverse
@@ -783,7 +783,7 @@ function _collect_model_fun!(p::NPFParameter, model_fun_pairs, ::Type{T}) where 
 end
 
 # Adapt base distribution element type for ForwardDiff compatibility.
-# MvNormal is re-parameterised with typed mean/cov; other distributions are used as-is.
+# MvNormal is re-parameterized with typed mean/cov; other distributions are used as-is.
 # The covariance STRUCTURE is preserved: densifying a ScalMat/PDiagMat to a full
 # PDMat would route logpdf through a LAPACK triangular solve (`trtrs`), which
 # Enzyme forward mode cannot handle under runtime activity ("Runtime Activity not

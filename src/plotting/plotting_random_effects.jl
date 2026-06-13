@@ -465,7 +465,7 @@ end
                                 kwargs_subplot, kwargs_layout) -> Plots.Plot
 
 Pairplot (scatter matrix) of empirical-Bayes estimates across all pairs of random
-effects, useful for visualising correlations and joint structure.
+effects, useful for visualizing correlations and joint structure.
 
 # Keyword Arguments
 - `dm::Union{Nothing, DataModel} = nothing`: data model (inferred from `res` by default).
@@ -1571,7 +1571,7 @@ end
                                     mcmc_draws, flow_samples, ncols, style, save_path,
                                     kwargs_subplot, kwargs_layout) -> Plots.Plot
 
-Plot standardised (z-score) empirical-Bayes estimates for each random effect as a
+Plot standardized (z-score) empirical-Bayes estimates for each random effect as a
 histogram and/or KDE, with a standard Normal reference. Values far from zero indicate
 outliers or misspecification.
 
@@ -1684,7 +1684,7 @@ end
                                             flow_samples, ncols, style, save_path,
                                             kwargs_subplot, kwargs_layout) -> Plots.Plot
 
-Scatter plot of standardised (z-score) empirical-Bayes estimates against a covariate
+Scatter plot of standardized (z-score) empirical-Bayes estimates against a covariate
 or group level index. Useful for detecting systematic patterns in the residual structure
 of the random-effects model.
 

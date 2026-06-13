@@ -57,7 +57,7 @@ abstract type FittingMethod end
 
 Lightweight stub that records which fitting method was used when a [`FitResult`](@ref)
 is loaded from disk via [`load_fit`](@ref). Replaces the full method struct (which
-contains optimiser closures that cannot be serialised) on save.
+contains optimizer closures that cannot be serialized) on save.
 
 `get_method(res).kind` returns a Symbol such as `:mle`, `:map`, `:laplace`, etc.
 """
@@ -68,7 +68,7 @@ end
 
 function Base.show(io::IO, m::_SavedFittingMethod)
     print(io,
-        "_SavedFittingMethod(:$(m.kind)) [loaded from disk; original optimiser not stored]")
+        "_SavedFittingMethod(:$(m.kind)) [loaded from disk; original optimizer not stored]")
 end
 
 """
@@ -184,11 +184,11 @@ end
 """
     FitParameters{T, U}
 
-Stores parameter estimates on both the transformed (optimisation) and untransformed
+Stores parameter estimates on both the transformed (optimization) and untransformed
 (natural) scales as `ComponentArray`s.
 
 # Fields
-- `transformed::T`: parameter vector on the optimisation scale.
+- `transformed::T`: parameter vector on the optimization scale.
 - `untransformed::U`: parameter vector on the natural scale.
 """
 struct FitParameters{T, U}
@@ -358,7 +358,7 @@ Return the estimated parameter vector.
 # Keyword Arguments
 - `scale::Symbol = :both`: which scale to return.
   - `:both` — a [`FitParameters`](@ref) struct with both scales.
-  - `:transformed` — the optimisation-scale `ComponentArray`.
+  - `:transformed` — the optimization-scale `ComponentArray`.
   - `:untransformed` — the natural-scale `ComponentArray`.
 """
 function get_params(res::FitResult; scale::Symbol = :both)
@@ -383,7 +383,7 @@ get_chain(::MethodResult) = error("Chain access not supported for this method.")
 """
     get_iterations(res::FitResult) -> Int
 
-Return the number of optimiser iterations. Valid for optimisation-based methods
+Return the number of optimizer iterations. Valid for optimization-based methods
 (MLE, MAP, Laplace, MCEM, SAEM).
 """
 get_iterations(res::FitResult) = get_iterations(res.result)
@@ -1137,7 +1137,7 @@ The sampling mechanism matches the one the fitting method itself uses for the
 conditional distribution, so the draws are consistent with the E-step:
 
 - `Laplace`, `GHQuadrature`: Gaussian Laplace
-  approximation centred at the EBE mode ``b^\\star`` with covariance
+  approximation centered at the EBE mode ``b^\\star`` with covariance
   ``(-H)^{-1}``, where ``H`` is the Hessian of the joint log-density at ``b^\\star``.
 - `MCEM`, `SAEM`: MCMC samples drawn from the exact conditional with the same
   sampler used in the E-step (Turing sampler for MCEM, `SaemixMH` or Turing
@@ -1157,7 +1157,7 @@ jointly and split per individual.
 - `warm_start::Bool = true`: seed the MCMC chain at the EB mode (MCMC path only).
 - `sampler = nothing`: override the MCMC sampler used for MCEM/SAEM. Defaults to
   the sampler stored on the fit method, or to `SaemixMH()` when the result was
-  loaded from disk (where the original sampler is not serialised).
+  loaded from disk (where the original sampler is not serialized).
 - `turing_kwargs::NamedTuple = NamedTuple()`: extra kwargs passed through to the
   MCMC sampler. Merged on top of the method's stored `turing_kwargs` when those
   are available.
@@ -1247,18 +1247,18 @@ end
 
 Re-estimate empirical Bayes estimates (EBEs) from a fitted model, ignoring any EBEs
 stored in the result. Returns a new `FitResult` with `eb_modes` replaced by the
-freshly-optimised modes. Use `get_random_effects` on the returned result to obtain the
+freshly-optimized modes. Use `get_random_effects` on the returned result to obtain the
 corresponding `NamedTuple` of `DataFrame`s.
 
 Supported methods: `Laplace`, `MCEM`, `SAEM`.
 
 # Keyword Arguments
-- `ebe_optimizer`: inner optimiser for EBE mode-finding (default: `LBFGS` with backtracking).
+- `ebe_optimizer`: inner optimizer for EBE mode-finding (default: `LBFGS` with backtracking).
 - `ebe_optim_kwargs::NamedTuple`: extra kwargs forwarded to `Optimization.solve`.
 - `ebe_adtype`: automatic differentiation type (default: `AutoForwardDiff()`).
 - `ebe_grad_tol`: gradient convergence tolerance (default: `:auto`).
 - `ebe_multistart_n::Int`: number of multistart candidates (default: `50`).
-- `ebe_multistart_k::Int`: k-means clusters for multistart initialisation (default: `1`).
+- `ebe_multistart_k::Int`: k-means clusters for multistart initialization (default: `1`).
 - `ebe_multistart_max_rounds::Int`: maximum multistart refinement rounds (default: `5`).
 - `ebe_multistart_sampling::Symbol`: candidate sampling strategy — `:lhs`, `:random`, or `:mcmc`
   (default: `:lhs`). With `:mcmc`, `ebe_multistart_n` conditional posterior samples are drawn
@@ -1277,8 +1277,8 @@ Supported methods: `Laplace`, `MCEM`, `SAEM`.
 - `ebe_rescue_multistart_sampling::Symbol`: sampling for rescue (default: `:lhs`).
 - `constants_re::NamedTuple`: fix specific RE levels at given values (natural scale).
 - `individuals`: `nothing` (all) or a vector of primary IDs. When provided, only batches
-  containing at least one listed individual are re-optimised; the remaining batches retain
-  the `eb_modes` already stored in `res`. Co-batch individuals are always re-optimised.
+  containing at least one listed individual are re-optimized; the remaining batches retain
+  the `eb_modes` already stored in `res`. Co-batch individuals are always re-optimized.
 - `ode_args::Tuple`, `ode_kwargs::NamedTuple`: forwarded to the ODE solver.
 - `rng::AbstractRNG`: random number generator.
 - `progress::Bool`: show progress bar (default: `false`).
@@ -1501,7 +1501,7 @@ Laplace, SAEM, MCEM, GHQuadrature.
 - `mc_integrator::Union{Nothing, MCIntegrator}`: if not `nothing`, use Monte Carlo
   sampling for **all** batches instead of AGHQ. See [`MCIntegrator`](@ref).
 - `fallback::Union{Nothing, MCIntegrator}`: what to do when the Cholesky of `-H` fails
-  for a batch. `nothing` raises an error (old behaviour). An `MCIntegrator` falls back to
+  for a batch. `nothing` raises an error (old behavior). An `MCIntegrator` falls back to
   sampling for that batch and issues a warning. Default: `MCIntegrator()` (Turing-based sampling,
   1000 samples).
 """
@@ -1659,7 +1659,7 @@ Fit a model to data using the specified estimation method.
 
 # Keyword Arguments
 - `constants::NamedTuple = NamedTuple()`: fix named parameters at given values on the
-  natural scale. Fixed parameters are removed from the optimiser state.
+  natural scale. Fixed parameters are removed from the optimizer state.
 - `penalty::NamedTuple = NamedTuple()`: add per-parameter quadratic penalties on the
   natural scale (not available for MCMC).
 - `ode_args::Tuple = ()`: extra positional arguments forwarded to the ODE solver.
@@ -2021,24 +2021,46 @@ function _loglikelihood_individual_rowwise(dm::DataModel, idx::Int, θ, η_ind,
     model = dm.model
     ind = dm.individuals[idx]
     obs_rows = dm.row_groups.obs_rows[idx]
+    T_el = promote_type(eltype(θ), eltype(η_ind))
+    isempty(obs_rows) && return zero(T_el)
     const_cov = ind.const_cov
     obs_series = ind.series.obs
+    obs_cols = dm.config.obs_cols
     vary_cache = cache.vary_cache === nothing ? nothing : cache.vary_cache[idx]
     t_obs = vary_cache === nothing ? _get_col(dm.df, dm.config.time_col)[obs_rows] : nothing
-    T_el = promote_type(eltype(θ), eltype(η_ind))
-    ll = zero(T_el)
-    obs_cols = dm.config.obs_cols
-    isempty(obs_rows) && return ll
+    # `_row_re_template` derives its axes from the deliberately-boxing
+    # `_row_random_effects_at`, so `row_tmpl` is statically `_RowREFill{Any}`.
+    # Pass it into the row loop behind a function barrier (`tmpl::TM` type
+    # parameter) so the axes become concrete there: `_row_random_effects_fill`
+    # then returns a concrete ComponentVector and the formulas/logpdf calls
+    # dispatch statically — mirroring the `_ll_rows_obs` fast path. (Without the
+    # barrier every per-row `calculate_formulas_obs`/`getproperty`/`logpdf` boxed
+    # through `Any`.)
     row_tmpl = _row_re_template(dm, idx, 1, η_ind; obs_only = true)
+    return _ll_rows_obs_rowwise(dm, idx, model, θ, η_ind, cache, sol_accessors,
+        const_cov, obs_series, obs_cols, vary_cache, ind, t_obs, row_tmpl, T_el)
+end
+
+# Row loop of `_loglikelihood_individual_rowwise` behind a function barrier: with
+# `tmpl::TM` arriving as a concrete type parameter the per-row η ComponentVector is
+# concrete, so the formulas RGF call, observation field accesses, and logpdf
+# evaluations dispatch statically (same role as `_ll_rows_obs`, but with per-row η
+# re-selection retained). HMM-free fast path; the first HMM-producing row hands the
+# remainder to `_loglikelihood_rows_hmm`.
+function _ll_rows_obs_rowwise(dm::DataModel, idx::Int, model::M, θ, η_ind,
+        cache::_LLCache, sol_accessors, const_cov::CC, obs_series::OS, obs_cols,
+        vary_cache, ind, t_obs, tmpl::TM, ::Type{T}) where {M, CC, OS, TM, T}
+    obs_rows = dm.row_groups.obs_rows[idx]
+    ll = zero(T)
     for i in eachindex(obs_rows)
         vary = vary_cache === nothing ? _varying_at(dm, ind, i, t_obs) : vary_cache[i]
-        η_row = _row_random_effects_fill(dm, idx, i, η_ind, row_tmpl; obs_only = true)
+        η_row = _row_random_effects_fill(dm, idx, i, η_ind, tmpl; obs_only = true)
         obs = sol_accessors === nothing ?
               calculate_formulas_obs(model, θ, η_row, const_cov, vary) :
               calculate_formulas_obs(model, θ, η_row, const_cov, vary, sol_accessors)
         if _row_has_hmm_dist(obs, obs_cols)
             ll_hmm = _loglikelihood_rows_hmm(dm, idx, θ, η_ind, cache, sol_accessors, i)
-            isfinite(ll_hmm) || return -Inf
+            isfinite(ll_hmm) || return T(-Inf)
             return ll + ll_hmm
         end
         for col in obs_cols
@@ -2048,7 +2070,7 @@ function _loglikelihood_individual_rowwise(dm::DataModel, idx::Int, θ, η_ind,
             v = _fast_logpdf(dist, y)
             v === nothing && (v = logpdf(dist, y))
             if !isfinite(v)
-                return -Inf
+                return T(-Inf)
             end
             ll += v
         end
@@ -2182,25 +2204,23 @@ function _loglikelihood_rows_hmm(dm::DataModel, idx::Int, θ, η_ind, cache::_LL
                     hmm_has_prior[j] = true
                     continue
                 end
-                v = try
-                    logpdf(dist_use, y)
+                # Combined accessor: continuous-time families propagate the hidden
+                # state once and reuse it for both the likelihood and the posterior
+                # (was two independent `exp(QΔt)` propagations per observed row). The
+                # returned pair is bit-identical to separate logpdf/posterior calls.
+                lp_post = try
+                    _hmm_logpdf_and_posterior(dist_use, y)
                 catch err
                     if err isa DomainError || err isa ArgumentError
                         return -Inf
                     end
                     rethrow(err)
                 end
+                v = lp_post[1]
                 if !isfinite(v)
                     return -Inf
                 end
-                hmm_priors[j] = try
-                    posterior_hidden_states(dist_use, y)
-                catch err
-                    if err isa DomainError || err isa ArgumentError
-                        return -Inf
-                    end
-                    rethrow(err)
-                end
+                hmm_priors[j] = lp_post[2]
                 hmm_has_prior[j] = true
             else
                 y === missing && continue

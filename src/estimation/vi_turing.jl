@@ -282,7 +282,7 @@ function _fit_model(dm::DataModel, method::VI, args...;
     # third argument — a function `(rng, ldf) -> q` (e.g. `q_meanfield_gaussian`). `vi` builds
     # a correctly linked `LogDensityFunction` internally and calls the family on it; the old
     # API of pre-constructing `q` from the model was removed. Pass the family function (a
-    # user-supplied `q_init` is honoured as-is).
+    # user-supplied `q_init` is honored as-is).
     if q_init === nothing
         q_init = family == :meanfield ? Turing.q_meanfield_gaussian :
                  Turing.q_fullrank_gaussian

@@ -137,7 +137,7 @@ using OrdinaryDiffEq
         @test isapprox(sol(2.0)[1], 1.0)
 
         # infusion_rates must be reset between solves on the same DataModel —
-        # regression test: t=t0 infusion was only initialised once at construction,
+        # regression test: t=t0 infusion was only initialized once at construction,
         # so the second solve saw infusion_rates=[0] and subsequent solves saw negative rates
         dm_evt = DataModel(model, df_evt; primary_id = :ID, time_col = :t,
             evid_col = :EVID, amt_col = :AMT, rate_col = :RATE, cmt_col = :CMT)
