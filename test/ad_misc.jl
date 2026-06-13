@@ -4,7 +4,7 @@ using DifferentiationInterface
 using ForwardDiff
 
 @testset "Helpers mutation warnings" begin
-    # Mutating helpers should emit warnings for Zygote compatibility.
+    # Mutating helpers should emit warnings (reverse-mode AD compatibility).
     @test_logs (:warn,) @eval @helpers begin
         bump!(x) = (y = copy(x); push!(y, 1.0); y)
     end

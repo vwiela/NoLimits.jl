@@ -267,8 +267,8 @@ function stickbreak_forward(p::AbstractVector{<:Real})
     k >= 2 || error("stickbreak_forward requires at least 2 elements.")
     T = promote_type(eltype(p), Float64)
     # `remaining` tracks 1 - Σ_{j<i} p_j, updated by subtracting each pᵢ in the loop.
-    # A simple mutating loop suffices here: unlike the inverse, the forward transform
-    # is not typically differentiated by Zygote, so it need not be non-mutating.
+    # A simple mutating loop suffices here: the forward transform runs at parameter
+    # setup and is not differentiated by the optimizer, so it need not be non-mutating.
     t = Vector{T}(undef, k - 1)
     remaining = one(T)
     for i in 1:(k - 1)
@@ -291,7 +291,8 @@ Single-allocation sequential fill. `remaining` carries the running product
 `∏_{j<i}(1-σ_j)` — the same left-to-right multiplication order as the historical
 `cumprod` formulation, so results are bit-identical. ForwardDiff/Enzyme-forward
 compatible (plain index assignment into a locally allocated, promoted-eltype
-vector); reverse-mode Zygote would need the old non-mutating `cumprod` form.
+vector); a reverse-mode backend that cannot differentiate mutation would need the
+old non-mutating `cumprod` form.
 """
 function stickbreak_inverse(t::AbstractVector{<:Real})
     k1 = length(t)

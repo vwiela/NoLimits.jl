@@ -44,7 +44,7 @@ end
 
 function _warn_if_mutating_helper(def::HelperDef)
     _helper_contains_mutation(def.body) || return nothing
-    @warn "Possible mutation detected in @helpers for $(def.name). Zygote may still work depending on the exact code, but mutation often breaks it. ForwardDiff usually handles mutation but can increase compile time and runtime for large models. Consider a non-mutating form if you need Zygote."
+    @warn "Possible mutation detected in @helpers for $(def.name). ForwardDiff usually handles mutation but it can increase compile time and runtime for large models, and may break some reverse-mode AD backends. Consider a non-mutating form."
     return nothing
 end
 
@@ -115,7 +115,7 @@ The helpers `NamedTuple` is stored in the `Model` and passed automatically at
 evaluation time via `get_helper_funs`.
 
 Mutating operations (calls ending in `!`, indexed assignment) trigger a warning since
-they may break Zygote-based automatic differentiation.
+they may break some reverse-mode automatic differentiation backends.
 """
 macro helpers(block)
     defs = parse_helpers(block)

@@ -63,9 +63,8 @@ A few conventions are load-bearing and enforced throughout the codebase:
   default backend, propagates `Dual` numbers and handles in-place mutation fine; what it needs is
   *type-generic* code that lets a `Dual` flow through, so allocate temporaries from the input
   element type (`similar(x)`, `zeros(eltype(x), n)`) rather than a hard-coded `Float64`.
-  Non-mutating implementations are required only on paths that also run through a reverse-mode
-  backend such as Zygote (used for VI and normalizing flows), which cannot differentiate array
-  mutation. See [Helpers](model-building/helpers.md).
+  Non-mutating implementations are preferred where code may also run through a reverse-mode
+  backend that cannot differentiate array mutation. See [Helpers](model-building/helpers.md).
 - **Accessor functions.** Struct fields are reached through `get_*` accessor functions rather
   than direct field access. This applies internally and, above all, in the public API: every
   user-facing type ships `get_*` accessors, so users never have to reach into a struct with dot

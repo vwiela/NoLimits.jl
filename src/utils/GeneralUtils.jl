@@ -4,7 +4,6 @@ export flatten_re_values
 export rowsoftmax
 
 using ForwardDiff
-using Zygote
 import DiffEqBase
 
 function dir(x)
@@ -41,11 +40,6 @@ const _ODE_VERBOSE_LOUD = pkgversion(DiffEqBase) >= v"7" ?
                           DiffEqBase.SciMLLogging.Standard() : true
 @inline _ode_verbose(v::Bool) = v ? _ODE_VERBOSE_LOUD : _ODE_VERBOSE_SILENT
 @inline _ode_verbose(v) = v   # already a verbosity object — pass through unchanged
-
-function hessian_fwd_over_zygote(f, x)
-    g(xv) = Zygote.gradient(f, xv)[1]
-    return ForwardDiff.jacobian(g, x)
-end
 
 function build_ode_params(de, θ;
         random_effects = ComponentArray(NamedTuple()),

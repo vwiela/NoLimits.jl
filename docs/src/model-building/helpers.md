@@ -24,7 +24,7 @@ end
 - Helper arguments must be simple symbols, optionally typed (e.g., `x` or `x::Float64`).
 - Duplicate helper names within the same block are rejected.
 - An empty block is valid and yields `NamedTuple()`.
-- Mutating helper patterns (e.g., in-place array operations) trigger a warning, since reverse-mode automatic differentiation backends such as Zygote require non-mutating code.
+- Mutating helper patterns (e.g., in-place array operations) trigger a warning, since some reverse-mode automatic differentiation backends require non-mutating code.
 
 ## Example: Standalone Helper Block
 
@@ -110,4 +110,4 @@ end
 
 ## Note on Automatic Differentiation
 
-Helpers that mutate arrays in place are detected and produce a warning. When reverse-mode AD compatibility is needed (e.g., with Zygote), prefer non-mutating implementations.
+Helpers that mutate arrays in place are detected and produce a warning. When reverse-mode AD compatibility is needed, prefer non-mutating implementations.

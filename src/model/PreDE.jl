@@ -121,7 +121,7 @@ end
 
 function _warn_if_mutating_prede(name::Symbol, ex::Expr)
     _prede_contains_mutation(ex) || return nothing
-    @warn "Possible mutation detected in @preDifferentialEquation for $(name). Zygote may still work depending on the exact code, but mutation often breaks it. ForwardDiff usually handles mutation but can increase compile time and runtime for large models. Consider a non-mutating form if you need Zygote."
+    @warn "Possible mutation detected in @preDifferentialEquation for $(name). ForwardDiff usually handles mutation but it can increase compile time and runtime for large models, and may break some reverse-mode AD backends. Consider a non-mutating form."
     return nothing
 end
 
@@ -238,7 +238,7 @@ The symbols `t` and `ξ` are forbidden (pre-DE variables are time-constant).
 Pre-DE variables are computed once per individual before the ODE is integrated and
 are available inside `@DifferentialEquation` and `@initialDE`.
 
-Mutating operations trigger a warning since they may break Zygote-based AD.
+Mutating operations trigger a warning since they may break some reverse-mode AD backends.
 """
 macro preDifferentialEquation(block)
     RuntimeGeneratedFunctions.init(__module__)

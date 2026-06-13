@@ -3,7 +3,6 @@ using NoLimits
 using ComponentArrays
 using Distributions
 using OrdinaryDiffEq
-using SciMLSensitivity
 using ForwardDiff
 using FiniteDifferences
 using DataInterpolations
@@ -104,8 +103,7 @@ using DataInterpolations
         u0 = calculate_initial_state(model, fe0, η, const_covariates_i)
         prob = ODEProblem(f!_local, u0, tspan, θt)
         sol = solve(prob, Tsit5();
-            callback = cb, abstol = 1e-9, reltol = 1e-9,
-            sensealg = InterpolatingAdjoint(autojacvec = ZygoteVJP()))
+            callback = cb, abstol = 1e-9, reltol = 1e-9)
         sol_accessors = get_de_accessors_builder(model.de.de)(sol,
             get_de_compiler(model.de.de)((;
                 fixed_effects = fe0,

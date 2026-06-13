@@ -30,15 +30,16 @@ end
     val_fwd, grad_fwd = value_and_gradient(f, AutoForwardDiff(), x)
     @test length(grad_fwd) == length(x)
 
-    # ReverseDiff does not support Zygote.Buffer-based implementation.
+    # The mutating-buffer Val(:inplace) variant must agree with the default under
+    # ForwardDiff (it uses a plain promoted-eltype buffer, so Duals flow through).
+    val_fwd_inplace, grad_fwd_inplace = value_and_gradient(f_inplace, AutoForwardDiff(), x)
+    @test isapprox(val_fwd_inplace, val_fwd; rtol = 1e-6, atol = 1e-8)
+    @test isapprox(grad_fwd_inplace, grad_fwd; rtol = 1e-6, atol = 1e-8)
 
     val_fwd_fast, grad_fwd_fast = value_and_gradient(f_fast, AutoForwardDiff(), x)
     @test isapprox(val_fwd_fast, val_fwd; rtol = 1e-6, atol = 1e-8)
     @test isapprox(grad_fwd_fast, grad_fwd; rtol = 1e-6, atol = 1e-8)
 
-    # ReverseDiff does not support Zygote.Buffer-based implementation.
-
     val_fwd_p, grad_fwd_p = value_and_gradient(f_params, AutoForwardDiff(), flat)
-
-    # ReverseDiff does not support Zygote.Buffer-based implementation.
+    @test length(grad_fwd_p) == length(flat)
 end

@@ -1,6 +1,5 @@
 using LinearAlgebra
 using Random
-using Zygote
 using Functors
 using Optimisers
 
@@ -231,15 +230,16 @@ end
 # default's ordering so all three entry points agree for any parameters.
 function (tree::SoftTree)(
         x::AbstractVector{<:Real}, params::SoftTreeParams, ::Val{:inplace})
-    # Zygote-compatible variant: identical traversal to the default method, but the
-    # probability buffer is a Zygote.Buffer so reverse-mode AD can differentiate
-    # through the in-place writes.
+    # Mutating-buffer variant kept for API compatibility: identical traversal to the
+    # default method, but the probability buffer is filled in place. ForwardDiff
+    # propagates `Dual`s through the promoted-eltype buffer, so the result matches the
+    # default method for any params.
     length(x) == tree.input_dim ||
         error("Invalid input length. Expected $(tree.input_dim); got $(length(x)).")
     n_leaves = 2^tree.depth
     T = promote_type(
         eltype(params.node_weights), eltype(params.node_biases), eltype(x))
-    probs = Zygote.Buffer(zeros(T, n_leaves))
+    probs = zeros(T, n_leaves)
     probs[1] = one(T)
     for level in 0:(tree.depth - 1)
         n_prev = 2^level
@@ -252,8 +252,7 @@ function (tree::SoftTree)(
             probs[k] = old * p
         end
     end
-    probs_v = copy(probs)
-    return [_st_leafdot(params.leaf_values, o, probs_v)
+    return [_st_leafdot(params.leaf_values, o, probs)
             for o in 1:size(params.leaf_values, 1)]
 end
 

@@ -42,7 +42,7 @@ end
 end
 
 @testset "PreDifferentialEquation mutation warnings" begin
-    # Mutating patterns should emit warnings for Zygote compatibility.
+    # Mutating patterns should emit warnings (reverse-mode AD compatibility).
     @test_logs (:warn,) @eval @preDifferentialEquation begin
         v = (x = [1.0, 2.0]; x[1] = 0.0; x[1])
     end
