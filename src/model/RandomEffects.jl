@@ -1,13 +1,12 @@
 export @randomEffects
+export get_re_dist_exprs
 export RandomEffects
 export RandomEffect
 export get_re_meta
-export get_re_builders
 export get_re_names
 export get_re_groups
 export get_re_types
 export get_re_syms
-export get_re_dist_exprs
 export get_create_random_effect_distribution
 export get_re_logpdf
 

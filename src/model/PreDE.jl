@@ -1,7 +1,7 @@
 export @preDifferentialEquation
+export get_prede_builder
 export PreDifferentialEquation
 export get_prede_meta
-export get_prede_builder
 export get_prede_names
 export get_prede_syms
 export get_prede_lines

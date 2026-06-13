@@ -5,8 +5,8 @@ import ForwardDiff
 using ComponentArrays
 
 export ForwardTransform
-export InverseTransform
 export TransformSpec
+export InverseTransform
 export log_forward
 export log_inverse
 export logit_forward

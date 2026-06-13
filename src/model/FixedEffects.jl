@@ -7,6 +7,7 @@ using Random
 using Functors
 
 export @fixedEffects
+export get_collect_names
 export FixedEffects
 export logprior
 export get_meta
@@ -27,7 +28,6 @@ export get_se_mask
 export get_se_names
 export get_model_funs
 export get_params
-export get_collect_names
 
 struct FixedEffectsMeta
     names::Vector{Symbol}

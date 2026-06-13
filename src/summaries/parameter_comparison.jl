@@ -51,7 +51,7 @@ are shown as `-` in the columns where they are absent, unless `common_only=true`
 restricts the table to parameters shared by every model.
 
 By default only standard-error-eligible parameters are listed (matching
-[`summarize`](@ref)); pass `include_non_se=true` to include the rest. Column
+`summarize`); pass `include_non_se=true` to include the rest. Column
 labels default to `"model 1"`, `"model 2"`, and so on, and can be set either via
 the `labels` keyword or by passing `label => fit` pairs.
 

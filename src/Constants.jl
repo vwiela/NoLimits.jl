@@ -1,9 +1,3 @@
-export REAL_SCALES
-export PSD_SCALES
-export DIAGONAL_SCALES
-export PROBABILITY_SCALES
-export TRANSITION_SCALES
-export RATE_MATRIX_SCALES
 export EPSILON
 
 const REAL_SCALES = (:identity, :log, :logit)

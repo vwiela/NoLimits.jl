@@ -1,7 +1,7 @@
 export @formulas
+export get_formulas_ir
 export Formulas
 export get_formulas_meta
-export get_formulas_ir
 export get_formulas_builders
 export get_formulas_all
 export get_formulas_obs

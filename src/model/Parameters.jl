@@ -13,6 +13,7 @@ export RealNumber, RealVector, RealPSDMatrix, RealDiagonalMatrix, NNParameters,
        NPFParameter, SoftTreeParameters, SplineParameters
 export ProbabilityVector, DiscreteTransitionMatrix, ContinuousTransitionMatrix
 export Priorless
+export NPFParameter, SoftTreeParameters, SplineParameters
 
 """
     Priorless()

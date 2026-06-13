@@ -1,5 +1,3 @@
-export dir
-export hessian_fwd_over_zygote
 export build_ode_params
 export flatten_re_names
 export flatten_re_values

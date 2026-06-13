@@ -365,3 +365,47 @@ destructure_params
 bspline_basis
 bspline_eval
 ```
+
+## Additional Exported API
+
+Exported, stable API that was missing from the sections above.
+
+### Variational Inference
+
+```@docs
+VI
+VIResult
+get_variational_posterior
+get_vi_state
+get_vi_trace
+```
+
+### Goodness-of-Fit and Diagnostic Plots
+
+```@docs
+plot_dv_pred
+plot_dv_ipred
+plot_wres_pred
+plot_shrinkage
+plot_observed_profiles
+plot_em_trajectories
+```
+
+### Estimation and Random-Effects Helpers
+
+```@docs
+sample_random_effects
+sample_posterior
+reestimate_ebes
+get_loglikelihood_quadrature
+compute_shrinkage
+compare_parameters
+MCIntegrator
+```
+
+### Serialization
+
+```@docs
+save_fit
+load_fit
+```

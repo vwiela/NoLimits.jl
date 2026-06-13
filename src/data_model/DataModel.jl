@@ -1,6 +1,4 @@
 export DataModel
-export DataModelConfig
-export PairingInfo
 export get_model
 export get_df
 export get_individuals
