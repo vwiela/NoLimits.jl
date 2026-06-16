@@ -7,6 +7,7 @@ using LinearAlgebra
 using Optimization
 using OptimizationOptimJL
 using OptimizationBBO
+using OptimizationNLopt
 using LineSearches
 using SciMLBase
 using ComponentArrays
@@ -2314,8 +2315,9 @@ fixed effects, while the inner optimizer computes per-individual MAP estimates o
 random effects.
 
 # Keyword Arguments
-- `optimizer`: outer Optimization.jl optimizer. Defaults to `LBFGS` with backtracking.
-- `optim_kwargs::NamedTuple = NamedTuple()`: keyword arguments for the outer `solve` call.
+- `optimizer`: outer Optimization.jl optimizer. Defaults to `NLopt.LN_BOBYQA()`
+  (derivative-free; requires a stopping criterion, supplied by the default `maxiters`).
+- `optim_kwargs::NamedTuple = (; maxiters = 1000)`: keyword arguments for the outer `solve` call.
 - `adtype`: AD backend for the outer optimizer. Defaults to `AutoForwardDiff()`.
 - `inner_optimizer`: inner optimizer for computing EBE modes. Defaults to `LBFGS`.
 - `inner_kwargs::NamedTuple = NamedTuple()`: keyword arguments for the inner `solve` call.
@@ -2352,8 +2354,8 @@ struct Laplace{O, K, A, IO, HO, CO, MS, L, U} <: FittingMethod
 end
 
 function Laplace(;
-        optimizer = OptimizationOptimJL.LBFGS(linesearch = LineSearches.BackTracking()),
-        optim_kwargs = NamedTuple(),
+        optimizer = NLopt.LN_BOBYQA(),
+        optim_kwargs = (; maxiters = 1000),
         adtype = Optimization.AutoForwardDiff(),
         inner_options = nothing,
         hessian_options = nothing,

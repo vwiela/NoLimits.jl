@@ -58,11 +58,12 @@ The `Laplace` constructor exposes options that control the outer fixed-effects o
 ```julia
 using Optimization
 using OptimizationOptimJL
+using OptimizationNLopt
 using LineSearches
 
 laplace_method = NoLimits.Laplace(;
-    optimizer=OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracking()),
-    optim_kwargs=NamedTuple(),
+    optimizer=NLopt.LN_BOBYQA(),
+    optim_kwargs=(; maxiters=1000),
     adtype=Optimization.AutoForwardDiff(),
     inner_optimizer=OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracking(maxstep=1.0)),
     inner_kwargs=NamedTuple(),
@@ -125,7 +126,8 @@ Practical implications:
 
 - Outer optimizer (`optimizer`, `optim_kwargs`, `adtype`)
   - Runs once at the top level.
-  - Can use local gradient methods (default `LBFGS`) or global/derivative-free methods.
+  - Can use derivative-free methods (default `NLopt.LN_BOBYQA()`), local gradient methods, or global methods.
+  - Note: NLopt optimizers interpret `optim_kwargs.maxiters` as a cap on the number of function *evaluations* (`maxeval`), not outer iterations; reaching it yields `retcode = MaxIters` (reported as not converged).
   - If using BlackBoxOptim (`OptimizationBBO.*`), finite bounds are required.
 - Inner optimizer (`inner_optimizer`, `inner_kwargs`, `inner_adtype`, `inner_grad_tol`)
   - Runs repeatedly across batches and across outer iterations.
@@ -134,7 +136,7 @@ Practical implications:
 
 Repository-verified behavior:
 
-- Default outer/inner optimizers are `OptimizationOptimJL.LBFGS(...)`.
+- Default outer optimizer is `NLopt.LN_BOBYQA()` (capped at `maxiters=1000` function evaluations); the default inner optimizer is `OptimizationOptimJL.LBFGS(...)`.
 - Outer BlackBoxOptim is supported with finite bounds (`lb`, `ub`); without bounds, an error is raised.
 
 Examples:
@@ -145,7 +147,8 @@ using OptimizationOptimJL
 using OptimizationBBO
 using LineSearches
 
-# 1) Local-gradient outer + local-gradient inner (default style)
+# 1) Local-gradient LBFGS for both outer and inner
+#    (the outer default is the derivative-free NLopt.LN_BOBYQA(); this overrides it with LBFGS)
 laplace_local = NoLimits.Laplace(;
     optimizer=OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracking()),
     inner_optimizer=OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracking()),

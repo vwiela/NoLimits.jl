@@ -115,16 +115,23 @@ jitter controls, caching, and bounds all behave identically. The only addition i
 `interaction::Bool=true`. See the [Laplace](laplace.md) page for the full description of
 the shared option groups, and the [`FOCEI`](@ref) API entry for the complete keyword list.
 
+As with `Laplace`, the default **outer** fixed-effects optimizer is the derivative-free
+`NLopt.LN_BOBYQA()` (capped at `maxiters=1000` function evaluations), while the inner EB
+optimization defaults to `OptimizationOptimJL.LBFGS`. NLopt optimizers interpret
+`optim_kwargs.maxiters` as a cap on the number of function *evaluations* (`maxeval`); reaching
+it yields `retcode = MaxIters` (reported as not converged).
+
 ```julia
 using NoLimits
 using Optimization
 using OptimizationOptimJL
+using OptimizationNLopt
 using LineSearches
 
 method = NoLimits.FOCEI(;
     interaction=true,
-    optimizer=OptimizationOptimJL.LBFGS(linesearch=LineSearches.BackTracking()),
-    optim_kwargs=(maxiters=100,),
+    optimizer=NLopt.LN_BOBYQA(),
+    optim_kwargs=(maxiters=1000,),
     adtype=Optimization.AutoForwardDiff(),
     inner_grad_tol=:auto,
     multistart_n=50,
