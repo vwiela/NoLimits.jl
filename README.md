@@ -104,15 +104,26 @@ See [Capabilities](https://manuhuth.github.io/NoLimits.jl/dev/capabilities) for 
 
 ## Installation
 
-NoLimits.jl requires Julia 1.12 or later. Install directly from GitHub:
+NoLimits.jl requires Julia 1.12 or later. It is registered in the Julia General Registry, so
+you can install it with:
+
+```julia
+using Pkg
+Pkg.add("NoLimits")
+```
+
+or from the REPL package mode (press `]`):
+
+```
+pkg> add NoLimits
+```
+
+To install the latest development version directly from GitHub:
 
 ```julia
 using Pkg
 Pkg.add(url="https://github.com/manuhuth/NoLimits.jl")
 ```
-
-Registry-based installation (`Pkg.add("NoLimits")`) will be available once the package is
-registered in the Julia General Registry.
 
 ## Quickstart
 
