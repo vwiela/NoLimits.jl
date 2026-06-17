@@ -28,5 +28,9 @@ jobs:
     steps:
       - uses: JuliaRegistries/TagBot@v1
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          ssh: ${{ secrets.DOCUMENTER_KEY }}
+          # Fine-grained PAT (Contents + Workflows: write). A workflow-scoped,
+          # user-tied credential is required: GITHUB_TOKEN and SSH deploy keys are
+          # both blocked from pushing tags to commits that contain .github/workflows/
+          # ("refusing to allow an OAuth App ... without workflow scope"). The PAT push
+          # also triggers the tag-based Documenter build.
+          token: ${{ secrets.TAGBOT_PAT }}
