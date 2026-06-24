@@ -7,6 +7,7 @@ using Optimisers
 using Random
 using NormalizingFlows
 using FunctionChains
+using Turing: Flat
 
 export AbstractParameterBlock
 export RealNumber, RealVector, RealPSDMatrix, RealDiagonalMatrix, NNParameters,
@@ -52,6 +53,9 @@ A scalar real-valued fixed-effect parameter block.
 - `lower::Real = -Inf`: lower bound on the natural scale (defaults to `EPSILON` when `scale=:log`).
 - `upper::Real = Inf`: upper bound on the natural scale.
 - `prior = Priorless()`: prior distribution (`Distributions.Distribution`) or `Priorless()`.
+  If left `Priorless()` while BOTH `lower` and `upper` are explicitly finite, the prior
+  defaults to `Uniform(lower, upper)` on the natural scale. The `EPSILON` lower auto-applied
+  for `scale=:log` does NOT count as explicit and does not trigger this.
 - `calculate_se::Bool = true`: whether to include this parameter in standard-error calculations.
 """
 @with_kw struct RealNumber{T <: Real} <: AbstractParameterBlock
@@ -67,6 +71,7 @@ end
 function RealNumber(value::Real; name::Symbol = :unnamed, scale::Symbol = :identity,
         lower::Real = -Inf, upper::Real = Inf, prior = Priorless(), calculate_se::Bool = true)
     _check_prior(prior, name)
+    explicit_bounds = isfinite(lower) && isfinite(upper)
     scale in REAL_SCALES ||
         error("Invalid scale for parameter $(name). Expected one of $(REAL_SCALES); got $(scale).")
     scale == :log && lower == -Inf && (lower = EPSILON)
@@ -86,6 +91,7 @@ function RealNumber(value::Real; name::Symbol = :unnamed, scale::Symbol = :ident
     u = T(upper)
     v >= l && v <= u ||
         error("Initial value out of bounds for parameter $(name). Expected $(l) ≤ value ≤ $(u); got value=$(v).")
+    prior = _default_uniform_prior(prior, explicit_bounds, l, u)
     return RealNumber{T}(name, v, scale, l, u, prior, calculate_se)
 end
 
@@ -105,7 +111,11 @@ A vector of real-valued fixed-effect parameters with per-element scale options.
 - `lower`: lower bounds per element. Defaults to `-Inf` (or `EPSILON` for `:log` elements).
 - `upper`: upper bounds per element. Defaults to `Inf`.
 - `prior = Priorless()`: a `Distributions.Distribution`, a `Vector{Distribution}` of
-  matching length, or `Priorless()`.
+  matching length, or `Priorless()`. If left `Priorless()` while at least one element has
+  BOTH an explicitly finite `lower` and `upper`, the prior defaults to a product
+  distribution: each explicitly bounded element gets `Uniform(lower, upper)` (natural scale)
+  and every other element gets an improper flat prior `Turing.Flat()` (logpdf ≡ 0 over ℝ).
+  The `EPSILON` lower auto-applied for `:log` elements does NOT count as explicit.
 - `calculate_se::Bool = true`: whether to include this parameter in standard-error calculations.
 """
 @with_kw struct RealVector{T <: Real, VT <: AbstractVector{T}} <: AbstractParameterBlock
@@ -126,6 +136,10 @@ function RealVector(value::AbstractVector{<:Real};
         prior = Priorless(),
         calculate_se::Bool = true)
     _check_prior(prior, name)
+    # Capture explicit finiteness from the raw bounds, before the :log EPSILON default below
+    # turns an unset lower into a finite EPSILON (which must NOT count as user-specified).
+    explicit_lower = isfinite.(lower)
+    explicit_upper = isfinite.(upper)
     all(s -> s in REAL_SCALES, scale) ||
         error("Invalid scale for parameter $(name). Expected each scale in $(REAL_SCALES); got $(scale).")
     s = collect(scale)
@@ -160,6 +174,8 @@ function RealVector(value::AbstractVector{<:Real};
         bad = findall(.!((v .>= l) .& (v .<= u)))
         error("Initial values out of bounds for parameter $(name). Expected l ≤ value ≤ u. Violations at indices $(bad); value=$(v), lower=$(l), upper=$(u).")
     end
+    explicit_bounds = collect(explicit_lower .& explicit_upper)
+    prior = _default_uniform_prior(prior, explicit_bounds, l, u)
     return RealVector{T, typeof(v)}(name, v, Vector{Symbol}(s), l, u, prior, calculate_se)
 end
 
@@ -688,6 +704,30 @@ function _check_prior(prior, name::Symbol)
         error("Invalid prior for parameter $(name). Expected Priorless() or Distributions.Distribution; got $(typeof(prior)).")
     end
     return nothing
+end
+
+# When a parameter declares BOTH a finite lower and upper bound but no prior, default to a
+# Uniform prior over those bounds on the natural scale. `explicit` reflects whether the
+# bounds were *explicitly* finite, so the EPSILON lower auto-applied for `:log` scale (and
+# the implicit (0, 1) of `:logit`) does NOT trigger this. A prior that is already set is
+# returned unchanged.
+function _default_uniform_prior(prior, explicit::Bool, lower::Real, upper::Real)
+    (prior isa Priorless && explicit) || return prior
+    return Uniform(lower, upper)
+end
+
+# Element-wise version for RealVector: each element with explicitly finite bounds gets a
+# Uniform(lower, upper); the remaining elements get an improper flat prior `Turing.Flat()`
+# (logpdf ≡ 0 over the whole real line). Only triggers when no prior is set and at least one
+# element is explicitly bounded; the result is a single multivariate prior of matching length.
+# `Flat` is handled by Turing's samplers (NUTS samples it directly and `rand` is defined), so
+# it is safe in both MAP and MCMC; being improper, it simply contributes nothing to the log
+# posterior for those elements.
+function _default_uniform_prior(prior, explicit::AbstractVector{Bool},
+        lower::AbstractVector, upper::AbstractVector)
+    (prior isa Priorless && any(explicit)) || return prior
+    dists = [explicit[i] ? Uniform(lower[i], upper[i]) : Flat() for i in eachindex(lower)]
+    return product_distribution(dists)
 end
 
 function _check_nn_prior(prior, name::Symbol, n::Integer)

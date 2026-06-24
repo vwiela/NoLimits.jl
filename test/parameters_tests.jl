@@ -7,6 +7,7 @@ using Optimisers
 using NormalizingFlows
 using FunctionChains
 using Bijectors
+using Turing: Flat
 
 @testset "Parameter blocks" begin
     # Validate defaults, bounds, and scale handling for scalar/vector/matrix parameters.
@@ -170,4 +171,47 @@ end
     n = length(st0.value)
     @test_throws ErrorException SoftTreeParameters(
         2, 2; name = :bad_st_prior, function_name = :ST, prior = fill(Normal(), n - 1))
+end
+
+@testset "Auto Uniform prior from bounds" begin
+    # RealNumber: explicit finite lower AND upper, no prior -> Uniform(lower, upper) natural.
+    a = RealNumber(0.5; name = :a, lower = 0.0, upper = 1.0)
+    @test a.prior isa Uniform
+    @test (a.prior.a, a.prior.b) == (0.0, 1.0)
+
+    # Only one bound, or no bounds -> stays Priorless.
+    @test RealNumber(0.5; name = :a_lo, lower = 0.0).prior isa NoLimits.Priorless
+    @test RealNumber(0.5; name = :a_hi, upper = 1.0).prior isa NoLimits.Priorless
+    @test RealNumber(0.5; name = :a_none).prior isa NoLimits.Priorless
+
+    # User-supplied prior is never overwritten.
+    @test RealNumber(0.5; name = :a_p, lower = 0.0, upper = 1.0,
+        prior = Normal(0, 1)).prior isa Normal
+
+    # :log EPSILON lower auto-default must NOT count as explicit; explicit log bounds do.
+    @test RealNumber(0.5; name = :a_log_hi, scale = :log, upper = 2.0).prior isa
+          NoLimits.Priorless
+    e = RealNumber(0.5; name = :a_log, scale = :log, lower = 1e-3, upper = 2.0)
+    @test e.prior isa Uniform
+    @test (e.prior.a, e.prior.b) == (1e-3, 2.0)
+
+    # RealVector all bounded -> product of Uniforms; logpdf finite.
+    v1 = RealVector([0.5, 0.5]; name = :v1, lower = [0.0, -1.0], upper = [1.0, 1.0])
+    @test v1.prior isa Distribution
+    @test length(v1.prior) == 2
+    @test isfinite(logpdf(v1.prior, [0.5, 0.0]))
+
+    # RealVector mixed: bounded element -> Uniform; unbounded -> improper Flat (logpdf 0).
+    v2 = RealVector([0.5, 0.5]; name = :v2, lower = [0.0, -Inf], upper = [1.0, Inf])
+    @test length(v2.prior) == 2
+    @test v2.prior.v[2] isa Flat
+    @test isfinite(logpdf(v2.prior, [0.5, 12345.0]))
+    @test logpdf(v2.prior, [0.5, 12345.0]) == logpdf(v2.prior, [0.5, -9.9e6])
+    # The Uniform(0,1) on element 1 contributes 0 and Flat contributes 0 -> total 0.
+    @test logpdf(v2.prior, [0.5, 12345.0]) == 0.0
+
+    # No bounds anywhere -> Priorless; user prior preserved.
+    @test RealVector([0.5, 0.5]; name = :v3).prior isa NoLimits.Priorless
+    @test RealVector([0.5, 0.5]; name = :v4, lower = [0.0, 0.0], upper = [1.0, 1.0],
+        prior = MvNormal(zeros(2), I)).prior isa MvNormal
 end
