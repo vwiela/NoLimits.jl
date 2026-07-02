@@ -11,13 +11,13 @@ using Pkg
 Pkg.add("NoLimits")
 ```
 
-or from the REPL package mode (press`]`):
+or from the REPL package mode (press `]`):
 
 ```julia
 pkg> add NoLimits
 ```
 
-To install the altest development version directly from GitHub:
+To install the latest development version directly from GitHub:
 
 ```julia
 using Pkg
